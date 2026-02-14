@@ -12,6 +12,8 @@ import streamlit.components.v1 as components
 import pandas as pd
 import numpy as np
 
+from streamlit_searchbox import st_searchbox  # pip install streamlit-searchbox
+
 from gini_paris_distances_calculations import (
     build_graph_from_edgelist,
     build_node_index,
@@ -37,7 +39,7 @@ def fmt_min(x) -> str:
 
 
 # ============================================================
-# PAGE CONFIG
+# PAGE CONFIG (UNA SOLA VOLTA, SUBITO)
 # ============================================================
 st.set_page_config(
     page_title="pariGINI",
@@ -69,13 +71,17 @@ LINE_COLORS = {
 WALK_COLOR = "#9CA3AF"
 
 # ============================================================
-# GLOBAL CSS (TEMA CHIARO FORZATO + DROPDOWN CHIARO + PRIMARY LEGGIBILE)
+# WHITE BACKGROUND + DARK TEXT (GLOBAL CSS) + FIX SEARCHBOX + FIX PRIMARY BUTTON
 # ============================================================
 st.markdown(
     """
 <style>
-/* Forza schema colori chiaro */
-:root, html, body { color-scheme: light !important; }
+/* ===========================
+   FORZA TEMA CHIARO (browser-level)
+   =========================== */
+:root, html {
+  color-scheme: light !important;
+}
 
 /* Sfondo sempre bianco */
 html, body { background: #ffffff !important; }
@@ -87,11 +93,8 @@ html, body { background: #ffffff !important; }
 /* Testi scuri */
 body, p, li, label, span, div { color: #111827 !important; }
 
-/* Padding top + un po' di spazio a sinistra per non coprire le decorazioni */
-.block-container {
-  padding-top: 2.2rem;
-  padding-left: 3.4rem;
-}
+/* Riduci padding top e rendi pagina più "pulita" */
+.block-container { padding-top: 2.2rem; }
 
 /* Titolo più grande */
 .pg-title {
@@ -112,7 +115,7 @@ div.stButton > button:hover {
   border-color: rgba(17,24,39,0.35) !important;
 }
 
-/* Primary button: chiaro con testo scuro */
+/* Primary button (Calcola Gini): chiaro con testo scuro, sempre leggibile */
 div.stButton > button[kind="primary"],
 div.stButton > button[data-testid="baseButton-primary"] {
   background: #e5e7eb !important;
@@ -125,110 +128,117 @@ div.stButton > button[data-testid="baseButton-primary"]:hover {
   border-color: rgba(17,24,39,0.35) !important;
 }
 
-/* Metric */
+/* Metric cards più leggibili */
 [data-testid="stMetricValue"] { color: #111827 !important; }
 [data-testid="stMetricLabel"] { color: rgba(17,24,39,0.75) !important; }
 
-/* ------------------------------------------------------------
-   INPUT + SELECT (STREAMLIT BASEWEB) - LOOK CHIARO GRIGIO
-   ------------------------------------------------------------ */
+/* ===========================
+   SEARCHBOX (dropdown) CHIARO
+   =========================== */
 
-/* Text input container */
-div[data-baseweb="input"] > div {
+/* input del searchbox – tutte le varianti BaseWeb */
+div[data-baseweb="input"],
+div[data-baseweb="base-input"],
+div[data-baseweb="input-container"],
+div[data-baseweb="select"] {
+  background-color: #f9fafb !important;
   background: #f9fafb !important;
-  border: 1px solid rgba(17,24,39,0.18) !important;
-  border-radius: 12px !important;
 }
-div[data-baseweb="input"] input {
-  background: #f9fafb !important;
+div[data-baseweb="input"] *,
+div[data-baseweb="base-input"] *,
+div[data-baseweb="input-container"] *,
+div[data-baseweb="select"] * {
+  background-color: transparent !important;
   color: #111827 !important;
 }
-div[data-baseweb="input"] input::placeholder {
+div[data-baseweb="input"] input,
+div[data-baseweb="base-input"] input,
+div[data-baseweb="select"] input {
+  background-color: transparent !important;
+  background: transparent !important;
+  color: #111827 !important;
+  -webkit-text-fill-color: #111827 !important;
+}
+div[data-baseweb="input"] input::placeholder,
+div[data-baseweb="base-input"] input::placeholder,
+div[data-baseweb="select"] input::placeholder {
   color: rgba(17,24,39,0.55) !important;
+  -webkit-text-fill-color: rgba(17,24,39,0.55) !important;
 }
 
-/* Selectbox container */
-div[data-baseweb="select"] > div {
-  background: #f9fafb !important;
-  border: 1px solid rgba(17,24,39,0.18) !important;
-  border-radius: 12px !important;
-  color: #111827 !important;
+/* bordo dell'input */
+div[data-baseweb="input"],
+div[data-baseweb="base-input"] {
+  border-color: rgba(17,24,39,0.18) !important;
 }
 
-/* Portale menu (dropdown) */
-div[data-baseweb="popover"] {
+/* popover e menu dei suggerimenti */
+div[data-baseweb="popover"],
+div[data-baseweb="popover"] > div {
   background: #f3f4f6 !important;
+  background-color: #f3f4f6 !important;
   color: #111827 !important;
   border: 1px solid rgba(17,24,39,0.18) !important;
   box-shadow: 0 10px 24px rgba(17,24,39,0.12) !important;
 }
 
-/* Liste opzioni (variano tra versioni) */
-div[role="listbox"],
-div[role="listbox"] ul,
-ul[role="listbox"] {
+div[data-baseweb="menu"],
+div[data-baseweb="menu"] ul {
   background: #f3f4f6 !important;
-  color: #111827 !important;
-}
-div[role="listbox"] * ,
-ul[role="listbox"] * {
+  background-color: #f3f4f6 !important;
   color: #111827 !important;
 }
 
-/* Riga opzione */
-div[role="option"],
-li[role="option"] {
-  background: #f3f4f6 !important;
+div[data-baseweb="menu"] * {
   color: #111827 !important;
 }
 
-/* Hover/selezionata */
-div[role="option"]:hover,
-li[role="option"]:hover,
-div[role="option"][aria-selected="true"],
-li[role="option"][aria-selected="true"] {
+div[data-baseweb="menu"] [role="option"],
+div[data-baseweb="menu"] li {
+  background: #f3f4f6 !important;
+  background-color: #f3f4f6 !important;
+}
+
+div[data-baseweb="menu"] [role="option"]:hover,
+div[data-baseweb="menu"] [role="option"][aria-selected="true"],
+div[data-baseweb="menu"] li:hover {
   background: #e5e7eb !important;
+  background-color: #e5e7eb !important;
 }
 
-/* ------------------------------------------------------------
-   DECORAZIONI LATERALI: "TRATTINI" COME LE BARRE TEMPO
-   (pill arrotondate, micro-gap, riempiono la viewport;
-    alcune zone doppie con pattern camminata-metro-metro-camminata)
-   ------------------------------------------------------------ */
-.metro-decor-v {
+/* Tag / chip selezionato nella searchbox */
+div[data-baseweb="tag"],
+span[data-baseweb="tag"] {
+  background-color: #e5e7eb !important;
+  color: #111827 !important;
+}
+
+/* Icone SVG dentro la searchbox */
+div[data-baseweb="input"] svg,
+div[data-baseweb="select"] svg {
+  fill: rgba(17,24,39,0.55) !important;
+  color: rgba(17,24,39,0.55) !important;
+}
+
+/* Decorazioni laterali (sinistra) */
+.metro-decor {
   position: fixed;
   left: 10px;
-  top: 0px;
-  height: 100vh;
-  width: 34px;              /* spazio per colonna doppia */
+  top: 120px;
+  width: 18px;
   z-index: 2;
-  opacity: 0.90;
+  opacity: 0.85;
   pointer-events: none;
-  display: flex;
-  flex-direction: column;
-  gap: 4px;                 /* come le barre tempo (micro separazione) */
-  padding: 10px 0;
-  box-sizing: border-box;
 }
-
-.metro-decor-v .vrow {
-  display: flex;
-  flex-direction: row;
-  gap: 6px;                 /* distanza tra colonna 1 e colonna 2 */
-  align-items: stretch;
-}
-
-.metro-decor-v .vseg {
+.metro-decor .pill {
   width: 10px;
-  border-radius: 999px;     /* molto stondato */
+  margin: 6px auto;
+  border-radius: 999px;
   border: 1px solid rgba(17,24,39,0.18);
-  box-sizing: border-box;
 }
-
-.metro-decor-v .vseg.ghost {
-  border: none;
-  background: transparent;
-}
+.metro-decor .pill.small { height: 10px; }
+.metro-decor .pill.med   { height: 16px; }
+.metro-decor .pill.long  { height: 24px; }
 </style>
 """,
     unsafe_allow_html=True,
@@ -237,147 +247,29 @@ li[role="option"][aria-selected="true"] {
 st.markdown("<div style='height:6px'></div>", unsafe_allow_html=True)
 
 # ============================================================
-# DECORAZIONI (VERTICALI, QUASI CONTINUE)
-# - pill come le barre tempi
-# - nessun colore consecutivo nella stessa colonna
-# - colori "sparati" random su TUTTE le linee
-# - quando c'è la colonna a destra: pattern fisso
-#   camminata -> metro -> metro -> camminata (ripetuto a blocchi)
+# DECORAZIONI (SINISTRA, PICCOLE, COLORATE, ALMENO 2 LINEE DIVERSE)
 # ============================================================
-def _get_decor_rng() -> random.Random:
-    if "decor_seed" not in st.session_state:
-        st.session_state.decor_seed = random.randint(1, 10_000_000)
-    return random.Random(st.session_state.decor_seed)
-
-
-def _pick_metro_color(rng: random.Random, avoid_color: str | None = None) -> str:
-    # pesca random da tutte le linee, evitando ripetizione consecutiva
+def render_left_decor():
     keys = list(LINE_COLORS.keys())
-    for _ in range(50):
-        c = LINE_COLORS[rng.choice(keys)]
-        if c != avoid_color:
-            return c
-    # fallback
-    return LINE_COLORS[keys[0]]
+    chosen = random.sample(keys, k=2)
+    if random.random() < 0.45:
+        chosen.append(random.choice([k for k in keys if k not in chosen]))
 
-
-def render_left_decor_vertical():
-    rng = _get_decor_rng()
-
-    # 1) genera altezze (vh) per riempire ~100vh con segmenti piccoli
-    heights = []
-    total = 0.0
-    while total < 100.0:
-        h = rng.uniform(1.6, 4.4)  # "trattini" simili alle barre: piccoli e tanti
-        if total + h > 100.0:
-            h = 100.0 - total
-        heights.append(h)
-        total += h
-
-    n = len(heights)
-
-    # 2) scegli blocchi "doppi" (sparse), ognuno lungo 4 segmenti esatti
-    #    (così la colonna destra può rispettare camminata-metro-metro-camminata)
-    double = [False] * n
-    i = 0
-    while i <= n - 4:
-        # probabilità di inizio blocco doppio
-        if rng.random() < 0.18:
-            # evita sovrapposizioni e troppi blocchi attaccati
-            if (i > 0 and double[i - 1]) or (i > 1 and double[i - 2]):
-                i += 1
-                continue
-            for k in range(4):
-                double[i + k] = True
-            i += 4
+    sizes = ["small", "med", "small", "long", "small", "med"]
+    colors = []
+    for i in range(len(sizes)):
+        if i % 3 == 0:
+            colors.append(WALK_COLOR)
         else:
-            i += 1
+            colors.append(LINE_COLORS[chosen[i % len(chosen)]])
 
-    # 3) colori colonna principale: no due uguali consecutivi
-    primary_colors = []
-    prev_p = None
-    for idx in range(n):
-        # un po' di camminata, ma non troppo
-        want_walk = (rng.random() < 0.22)
-
-        if want_walk and prev_p != WALK_COLOR:
-            c = WALK_COLOR
-        else:
-            # metro
-            c = _pick_metro_color(rng, avoid_color=prev_p)
-
-        # garantisci no consecutivi uguali
-        if c == prev_p:
-            if c == WALK_COLOR:
-                c = _pick_metro_color(rng, avoid_color=prev_p)
-            else:
-                c = WALK_COLOR if prev_p != WALK_COLOR else _pick_metro_color(rng, avoid_color=prev_p)
-
-        primary_colors.append(c)
-        prev_p = c
-
-    # 4) colori colonna destra SOLO nei blocchi doppi
-    #    pattern: walk, metro, metro, walk (ripetuto per ogni blocco)
-    secondary_colors = [None] * n
-    idx = 0
-    prev_s = None
-    while idx < n:
-        if not double[idx]:
-            prev_s = None  # quando torna singolo, "reset" per evitare vincoli strani
-            idx += 1
-            continue
-
-        # siamo dentro un blocco doppio: individua l'inizio del blocco (4 segmenti)
-        start = idx
-        # assicurati di partire davvero dall'inizio del blocco
-        while start > 0 and double[start - 1]:
-            start -= 1
-
-        # applica pattern sui 4
-        pattern = ["walk", "metro", "metro", "walk"]
-        for k in range(4):
-            j = start + k
-            if j >= n or not double[j]:
-                continue
-
-            if pattern[k] == "walk":
-                c = WALK_COLOR
-            else:
-                # metro: evita ripetizione consecutiva nella colonna destra
-                # e (se possibile) evita uguale al primario in quel punto
-                avoid = prev_s
-                c = _pick_metro_color(rng, avoid_color=avoid)
-                if c == primary_colors[j]:
-                    c = _pick_metro_color(rng, avoid_color=primary_colors[j])
-
-            # ulteriore check no consecutivi
-            if c == prev_s:
-                if c == WALK_COLOR:
-                    c = _pick_metro_color(rng, avoid_color=prev_s)
-                else:
-                    c = WALK_COLOR if prev_s != WALK_COLOR else _pick_metro_color(rng, avoid_color=prev_s)
-
-            secondary_colors[j] = c
-            prev_s = c
-
-        idx = start + 4
-
-    # 5) HTML
-    rows = []
-    for h, c1, c2 in zip(heights, primary_colors, secondary_colors):
-        # secondaria: solo quando presente; altrimenti ghost per non “saltare” troppo visivamente
-        s1 = f"<div class='vseg' style='height:{h:.3f}vh; background:{c1};'></div>"
-        if c2 is None:
-            s2 = "<div class='vseg ghost' style='height:{:.3f}vh;'></div>".format(h)
-        else:
-            s2 = f"<div class='vseg' style='height:{h:.3f}vh; background:{c2};'></div>"
-
-        rows.append(f"<div class='vrow'>{s1}{s2}</div>")
-
-    st.markdown(f"<div class='metro-decor-v'>{''.join(rows)}</div>", unsafe_allow_html=True)
+    pills = "\n".join(
+        [f"<div class='pill {sizes[i]}' style='background:{colors[i]}'></div>" for i in range(len(sizes))]
+    )
+    st.markdown(f"<div class='metro-decor'>{pills}</div>", unsafe_allow_html=True)
 
 
-render_left_decor_vertical()
+render_left_decor()
 
 # ============================================================
 # API: Géoplateforme - Autocompletion (IGN)
@@ -414,55 +306,44 @@ def geopf_completion(
     return data.get("results", []) or []
 
 
-def address_autocomplete(label: str, key: str, placeholder: str):
-    """
-    Autocomplete in tema chiaro: text_input + selectbox (niente componenti custom),
-    così il dropdown resta sempre chiaro.
-    """
-    map_key = f"{key}__map"
-    query_key = f"{key}__query"
-    choice_key = f"{key}__choice"
-    last_q_key = f"{key}__lastq"
+def make_search_fn(map_key: str):
+    def _search(searchterm: str):
+        if not searchterm or len(searchterm.strip()) < 3:
+            st.session_state[map_key] = {}
+            return []
 
-    q = st.text_input(
-        label if label else "",
-        key=query_key,
-        placeholder=placeholder,
-        label_visibility="collapsed" if not label else "visible",
-    )
-
-    prev_q = st.session_state.get(last_q_key, "")
-    if q != prev_q:
-        st.session_state[choice_key] = ""
-    st.session_state[last_q_key] = q
-
-    mp = {}
-    opts = []
-    if q and len(q.strip()) >= 3:
-        results = geopf_completion(q.strip(), terr="75", maximumResponses=8)
+        results = geopf_completion(searchterm, terr="75", maximumResponses=8)
+        mp = {}
+        opts = []
         for r in results:
             ft = r.get("fulltext")
             x = r.get("x")
             y = r.get("y")
             if ft and x is not None and y is not None:
-                mp[ft] = (float(x), float(y))
                 opts.append(ft)
+                mp[ft] = (float(x), float(y))
 
-    st.session_state[map_key] = mp
+        st.session_state[map_key] = mp
+        return opts
 
-    selected = None
+    return _search
+
+
+def address_autocomplete(label: str, key: str, placeholder: str):
+    map_key = f"{key}__map"
+    search_fn = make_search_fn(map_key)
+
+    selected = st_searchbox(
+        search_fn,
+        placeholder=placeholder,
+        label=label,
+        key=key,
+        clear_on_submit=False,
+    )
+
     coords = None
-
-    if opts:
-        selected_opt = st.selectbox(
-            "",
-            options=[""] + opts,
-            key=choice_key,
-            label_visibility="collapsed",
-        )
-        if selected_opt:
-            selected = selected_opt
-            coords = mp.get(selected_opt)
+    if selected:
+        coords = (st.session_state.get(map_key) or {}).get(selected)
 
     return selected, coords
 
@@ -847,9 +728,9 @@ def render_gini_bar(gini_value: float):
 st.markdown("<div class='pg-title'>pariGINI</div>", unsafe_allow_html=True)
 st.markdown(
     """
-I tuoi amici ti propongono un bar lontano? Calcola quanto è equa la scelta.  
+I tuoi amici ti propongono un bar troppo lontano? Calcola quanto è equa la scelta.  
 Misura la disuguaglianza dei tempi di spostamento in metro usando il Gini Index.  
-Inserisci da dove partite (minimo 2 amici) e dove andate: il Gini viene calcolato automaticamente.
+Inserisci da dove partite (minimo 2 persone) e dove andate: il Gini viene calcolato automaticamente.
 """
 )
 
@@ -908,7 +789,7 @@ with top_row[1]:
         on_click=remove_friend,
     )
 with top_row[2]:
-    st.caption("Minimo 2 amici. Scrivi e seleziona un suggerimento dall’autocompletamento.")
+    st.caption("Minimo 2 amici. Scrivi gli indirizzi e seleziona un suggerimento.")
 
 starts = []
 for i in range(st.session_state.n_friends):
@@ -979,10 +860,14 @@ if st.button(
             st.error(f"Errore nel calcolo: {e}")
             st.stop()
 
+    # 1) Gini
     gini_value = float(metrics.get("gini_time", np.nan))
     render_gini_bar(gini_value)
+
+    # 2) Barre percorso (tempi arrotondati nelle etichette)
     render_routes_html(results_df)
 
+    # 3) Spiegazione Gini (testo senza emoticon)
     if np.isfinite(gini_value):
         verdict = "abbastanza equo" if gini_value <= 0.2 else "poco equo"
         st.info(
@@ -991,8 +876,8 @@ if st.button(
 
 - Gini = 0: tutti i tempi di percorrenza sono uguali  
 - Gini = 1: massima disuguaglianza possibile  
-- Gini alto: tempi molto diversi, accessibilità disuguale  
-- Gini basso: tempi simili, accessibilità più uguale  
+- Gini alto: tempi molto diversi
+- Gini basso: tempi simili
 
 In questo caso: Gini = {gini_value:.4f} → {verdict}.
 """
@@ -1004,11 +889,12 @@ In questo caso: Gini = {gini_value:.4f} → {verdict}.
 
 - Gini = 0: tutti i tempi di percorrenza sono uguali  
 - Gini = 1: massima disuguaglianza possibile  
-- Gini alto: tempi molto diversi, accessibilità disuguale  
-- Gini basso: tempi simili, accessibilità più uguale
+- Gini alto: tempi molto diversi
+- Gini basso: tempi simili
 """
         )
 
+    # 4) Statistiche: SOLO min / medio / max (arrotondate)
     st.subheader("Statistiche tempi di percorrenza")
     c1, c2, c3 = st.columns(3)
     with c1:
@@ -1018,6 +904,7 @@ In questo caso: Gini = {gini_value:.4f} → {verdict}.
     with c3:
         st.metric("Massimo", f"{fmt_min(metrics.get('max_time_min', np.nan))} min")
 
+    # 5) Export
     with st.expander("Esporta risultati", expanded=False):
         col1, col2 = st.columns(2)
 
@@ -1065,8 +952,11 @@ st.divider()
 st.markdown(
     """
 ---
-**pariGINI** | Routing Dijkstra con cambi linea ottimizzati  
-Dati: RATP Metro Network (timed_edgelist.geojson)  
+**pariGINI**
+
+Dati: RATP Metro Network
 Autocomplete: Géoplateforme (IGN) - completion
+
+Francesco Farina e Francesco Paolo Savatteri. Per omett e per tutt3
 """
 )
