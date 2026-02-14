@@ -301,7 +301,7 @@ def render_routes_html(results_df):
 
     # righe
     for i, total, segs in precomp:
-        name = f"Amico {i+1}"
+        name = f"Amic {i+1}"
         seg_html = ""
 
         for s in segs:
@@ -594,7 +594,7 @@ starts = []
 for i in range(st.session_state.n_friends):
     row = st.columns([1, 7])
     with row[0]:
-        st.markdown(f"**Amico {i+1}**")
+        st.markdown(f"**Amic {i+1}**")
     with row[1]:
         _, coords = address_autocomplete(
             label="",
@@ -752,5 +752,7 @@ st.markdown(
 **pariGINI** | Basato su routing Dijkstra con cambi linea ottimizzati  
 📍 Dati: RATP Metro Network (timed_edgelist.geojson)  
 🧭 Autocomplete: Géoplateforme (IGN) - completion
+
+Sviluppato da Francesco Farina e Francesco Paolo Savatteri, per omett e per tutt3.
 """
 )

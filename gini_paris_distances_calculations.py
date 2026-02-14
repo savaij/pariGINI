@@ -26,7 +26,7 @@ METRIC_EPSG = 2154  # Lambert-93 (meters)
 # 4 km/h = 4000 m / 60 min
 WALK_SPEED_M_PER_MIN = 4000 / 60
 
-CHANGE_PENALTY_MIN = 2.0          # penalità per cambio linea
+CHANGE_PENALTY_MIN = 3.0          # penalità per cambio linea
 MAX_LINE_CHANGES = 1              # <= 1 cambio => max 2 linee
 START_LINE_PENALTY_MIN = 0.0      # penalità per inizio linea
 
