@@ -292,6 +292,8 @@ def route_time_minutes(
     Miglioria:
     - considera tutte le stazioni raggiungibili entro max_walk_min_start e max_walk_min_end
       (cap max_candidate_stations), poi sceglie la combinazione migliore.
+    - salva dettagli separati di cammino start/end: walk_time_start_min, walk_time_end_min
+      e relative distanze: walk_dist_start_m, walk_dist_end_m
     - opzionale: allow_walk_only prova anche camminata diretta e prende il minimo.
 
     Ritorna: (best_total_time_min, details_dict)
@@ -341,8 +343,15 @@ def route_time_minutes(
                 )
                 pairs_with_path += 1
 
-                walk_dist_m = float(d0_m + d1_m)
-                walk_time_min = float(walk_dist_m / float(walk_speed_m_per_min))
+                # --- walk start/end separati ---
+                walk_dist_start_m = float(d0_m)
+                walk_dist_end_m = float(d1_m)
+                walk_dist_m = float(walk_dist_start_m + walk_dist_end_m)
+
+                walk_time_start_min = float(walk_dist_start_m / float(walk_speed_m_per_min))
+                walk_time_end_min = float(walk_dist_end_m / float(walk_speed_m_per_min))
+                walk_time_min = float(walk_time_start_min + walk_time_end_min)
+
                 total_time_min = float(cost_with_penalties + walk_time_min)
 
                 if total_time_min < best_total:
@@ -353,8 +362,17 @@ def route_time_minutes(
                         "snapped_end_node": u1,
                         "snap_start_dist_m": float(d0_m),
                         "snap_end_dist_m": float(d1_m),
+
+                        # ✅ nuovi dettagli
+                        "walk_dist_start_m": float(walk_dist_start_m),
+                        "walk_dist_end_m": float(walk_dist_end_m),
+                        "walk_time_start_min": float(walk_time_start_min),
+                        "walk_time_end_min": float(walk_time_end_min),
+
+                        # totali
                         "walk_dist_m_total": float(walk_dist_m),
                         "walk_time_min": float(walk_time_min),
+
                         "path_nodes": path_nodes,
                         "edges": edges,
                         "metro_time_min": float(metro_time_min),
@@ -380,8 +398,17 @@ def route_time_minutes(
                 "mode": "walk_only",
                 "start_input_lonlat": tuple(map(float, start_lonlat)),
                 "end_input_lonlat": tuple(map(float, end_lonlat)),
+
+                # ✅ nuovi dettagli (tutto su "start")
+                "walk_dist_start_m": float(walk_only_dist_m),
+                "walk_dist_end_m": 0.0,
+                "walk_time_start_min": float(walk_only_time),
+                "walk_time_end_min": 0.0,
+
+                # totali
                 "walk_dist_m_total": float(walk_only_dist_m),
                 "walk_time_min": float(walk_only_time),
+
                 "metro_time_min": 0.0,
                 "penalty_paid_in_path_min": 0.0,
                 "total_time_min": float(walk_only_time),
@@ -501,6 +528,10 @@ def accessibility_inequality_to_target(
     """
     Calcola tempi di percorrenza da molti start verso un target.
     Ritorna: (results_df, metrics_dict)
+
+    Aggiornamento:
+    - salva anche walk_time_start_min / walk_time_end_min e walk_dist_start_m / walk_dist_end_m
+      quando disponibili nei dettagli.
     """
     rows = []
 
@@ -518,6 +549,13 @@ def accessibility_inequality_to_target(
             "total_time_min": np.nan,
             "metro_time_min": np.nan,
             "walk_time_min": np.nan,
+
+            # ✅ nuovi campi
+            "walk_time_start_min": np.nan,
+            "walk_time_end_min": np.nan,
+            "walk_dist_start_m": np.nan,
+            "walk_dist_end_m": np.nan,
+
             "penalty_paid_in_path_min": np.nan,
             "snapped_start_node": None,
             "snapped_end_node": None,
@@ -547,6 +585,13 @@ def accessibility_inequality_to_target(
             rec["total_time_min"] = float(total)
             rec["metro_time_min"] = float(info.get("metro_time_min", np.nan))
             rec["walk_time_min"] = float(info.get("walk_time_min", np.nan))
+
+            # ✅ nuovi dettagli (se presenti)
+            rec["walk_time_start_min"] = float(info.get("walk_time_start_min", np.nan))
+            rec["walk_time_end_min"] = float(info.get("walk_time_end_min", np.nan))
+            rec["walk_dist_start_m"] = float(info.get("walk_dist_start_m", np.nan))
+            rec["walk_dist_end_m"] = float(info.get("walk_dist_end_m", np.nan))
+
             rec["penalty_paid_in_path_min"] = float(info.get("penalty_paid_in_path_min", np.nan))
             rec["snapped_start_node"] = info.get("snapped_start_node", None)
             rec["snapped_end_node"] = info.get("snapped_end_node", None)
