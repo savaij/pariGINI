@@ -883,7 +883,7 @@ if st.button(
 
     # 3) Spiegazione Gini (testo senza emoticon)
     if np.isfinite(gini_value):
-        verdict = "abbastanza equo" if gini_value <= 0.2 else "poco equo"
+        verdict = "abbastanza equo" if gini_value <= 0.5 else "poco equo"
         st.info(
             f"""
 **Cosa significa il Gini Index?**
