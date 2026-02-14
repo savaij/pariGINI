@@ -4,13 +4,13 @@ Calcola e visualizza il Gini Index per la disuguaglianza di accessibilità in me
 """
 
 import json
+import math
+import random
 import requests
 import streamlit as st
 import streamlit.components.v1 as components
 import pandas as pd
 import numpy as np
-
-from streamlit_searchbox import st_searchbox  # pip install streamlit-searchbox
 
 from gini_paris_distances_calculations import (
     build_graph_from_edgelist,
@@ -19,24 +19,365 @@ from gini_paris_distances_calculations import (
 )
 
 # ============================================================
-# PAGE CONFIG (UNA SOLA VOLTA, SUBITO)
+# HELPERS
+# ============================================================
+def round_minutes(x) -> int:
+    """Arrotondamento classico (13.7 -> 14). Assume x >= 0."""
+    try:
+        v = float(x)
+    except Exception:
+        return 0
+    if not np.isfinite(v) or v <= 0:
+        return 0
+    return int(math.floor(v + 0.5))
+
+
+def fmt_min(x) -> str:
+    return str(round_minutes(x))
+
+
+# ============================================================
+# PAGE CONFIG
 # ============================================================
 st.set_page_config(
     page_title="pariGINI",
-    page_icon="🚇",
     layout="wide",
     initial_sidebar_state="collapsed",
 )
 
+# ============================================================
+# COLORS
+# ============================================================
+LINE_COLORS = {
+    "1": "#FFCD00",
+    "2": "#003CA6",
+    "3": "#7A8B2E",
+    "3bis": "#8E9AE6",
+    "4": "#7C2E83",
+    "5": "#FF7E2E",
+    "6": "#6EC4B1",
+    "7": "#FA9ABA",
+    "7bis": "#6EC4B1",
+    "8": "#CEADD2",
+    "9": "#B7D84B",
+    "10": "#C9910D",
+    "11": "#704B1C",
+    "12": "#007852",
+    "13": "#8E9AE6",
+    "14": "#62259D",
+}
+WALK_COLOR = "#9CA3AF"
+
+# ============================================================
+# GLOBAL CSS (TEMA CHIARO FORZATO + DROPDOWN CHIARO + PRIMARY LEGGIBILE)
+# ============================================================
 st.markdown(
     """
 <style>
-.pg-title { font-size: 3.0rem; font-weight: 800; line-height: 1.05; margin: 0.2rem 0 0.4rem 0; }
-.block-container { padding-top: 1.2rem; }
+/* Forza schema colori chiaro */
+:root, html, body { color-scheme: light !important; }
+
+/* Sfondo sempre bianco */
+html, body { background: #ffffff !important; }
+[data-testid="stAppViewContainer"] { background: #ffffff !important; }
+[data-testid="stHeader"] { background: #ffffff !important; }
+[data-testid="stSidebar"] { background: #ffffff !important; }
+[data-testid="stSidebarContent"] { background: #ffffff !important; }
+
+/* Testi scuri */
+body, p, li, label, span, div { color: #111827 !important; }
+
+/* Padding top + un po' di spazio a sinistra per non coprire le decorazioni */
+.block-container {
+  padding-top: 2.2rem;
+  padding-left: 3.4rem;
+}
+
+/* Titolo più grande */
+.pg-title {
+  font-size: 3.8rem;
+  font-weight: 900;
+  line-height: 1.02;
+  margin: 0.6rem 0 0.5rem 0;
+}
+
+/* Bottoni base */
+div.stButton > button {
+  border-radius: 12px;
+  border: 1px solid rgba(17,24,39,0.18) !important;
+  background: #ffffff !important;
+  color: #111827 !important;
+}
+div.stButton > button:hover {
+  border-color: rgba(17,24,39,0.35) !important;
+}
+
+/* Primary button: chiaro con testo scuro */
+div.stButton > button[kind="primary"],
+div.stButton > button[data-testid="baseButton-primary"] {
+  background: #e5e7eb !important;
+  color: #111827 !important;
+  border: 1px solid rgba(17,24,39,0.25) !important;
+}
+div.stButton > button[kind="primary"]:hover,
+div.stButton > button[data-testid="baseButton-primary"]:hover {
+  background: #d1d5db !important;
+  border-color: rgba(17,24,39,0.35) !important;
+}
+
+/* Metric */
+[data-testid="stMetricValue"] { color: #111827 !important; }
+[data-testid="stMetricLabel"] { color: rgba(17,24,39,0.75) !important; }
+
+/* ------------------------------------------------------------
+   INPUT + SELECT (STREAMLIT BASEWEB) - LOOK CHIARO GRIGIO
+   ------------------------------------------------------------ */
+
+/* Text input container */
+div[data-baseweb="input"] > div {
+  background: #f9fafb !important;
+  border: 1px solid rgba(17,24,39,0.18) !important;
+  border-radius: 12px !important;
+}
+div[data-baseweb="input"] input {
+  background: #f9fafb !important;
+  color: #111827 !important;
+}
+div[data-baseweb="input"] input::placeholder {
+  color: rgba(17,24,39,0.55) !important;
+}
+
+/* Selectbox container */
+div[data-baseweb="select"] > div {
+  background: #f9fafb !important;
+  border: 1px solid rgba(17,24,39,0.18) !important;
+  border-radius: 12px !important;
+  color: #111827 !important;
+}
+
+/* Portale menu (dropdown) */
+div[data-baseweb="popover"] {
+  background: #f3f4f6 !important;
+  color: #111827 !important;
+  border: 1px solid rgba(17,24,39,0.18) !important;
+  box-shadow: 0 10px 24px rgba(17,24,39,0.12) !important;
+}
+
+/* Liste opzioni (variano tra versioni) */
+div[role="listbox"],
+div[role="listbox"] ul,
+ul[role="listbox"] {
+  background: #f3f4f6 !important;
+  color: #111827 !important;
+}
+div[role="listbox"] * ,
+ul[role="listbox"] * {
+  color: #111827 !important;
+}
+
+/* Riga opzione */
+div[role="option"],
+li[role="option"] {
+  background: #f3f4f6 !important;
+  color: #111827 !important;
+}
+
+/* Hover/selezionata */
+div[role="option"]:hover,
+li[role="option"]:hover,
+div[role="option"][aria-selected="true"],
+li[role="option"][aria-selected="true"] {
+  background: #e5e7eb !important;
+}
+
+/* ------------------------------------------------------------
+   DECORAZIONI LATERALI: "TRATTINI" COME LE BARRE TEMPO
+   (pill arrotondate, micro-gap, riempiono la viewport;
+    alcune zone doppie con pattern camminata-metro-metro-camminata)
+   ------------------------------------------------------------ */
+.metro-decor-v {
+  position: fixed;
+  left: 10px;
+  top: 0px;
+  height: 100vh;
+  width: 34px;              /* spazio per colonna doppia */
+  z-index: 2;
+  opacity: 0.90;
+  pointer-events: none;
+  display: flex;
+  flex-direction: column;
+  gap: 4px;                 /* come le barre tempo (micro separazione) */
+  padding: 10px 0;
+  box-sizing: border-box;
+}
+
+.metro-decor-v .vrow {
+  display: flex;
+  flex-direction: row;
+  gap: 6px;                 /* distanza tra colonna 1 e colonna 2 */
+  align-items: stretch;
+}
+
+.metro-decor-v .vseg {
+  width: 10px;
+  border-radius: 999px;     /* molto stondato */
+  border: 1px solid rgba(17,24,39,0.18);
+  box-sizing: border-box;
+}
+
+.metro-decor-v .vseg.ghost {
+  border: none;
+  background: transparent;
+}
 </style>
 """,
     unsafe_allow_html=True,
 )
+
+st.markdown("<div style='height:6px'></div>", unsafe_allow_html=True)
+
+# ============================================================
+# DECORAZIONI (VERTICALI, QUASI CONTINUE)
+# - pill come le barre tempi
+# - nessun colore consecutivo nella stessa colonna
+# - colori "sparati" random su TUTTE le linee
+# - quando c'è la colonna a destra: pattern fisso
+#   camminata -> metro -> metro -> camminata (ripetuto a blocchi)
+# ============================================================
+def _get_decor_rng() -> random.Random:
+    if "decor_seed" not in st.session_state:
+        st.session_state.decor_seed = random.randint(1, 10_000_000)
+    return random.Random(st.session_state.decor_seed)
+
+
+def _pick_metro_color(rng: random.Random, avoid_color: str | None = None) -> str:
+    # pesca random da tutte le linee, evitando ripetizione consecutiva
+    keys = list(LINE_COLORS.keys())
+    for _ in range(50):
+        c = LINE_COLORS[rng.choice(keys)]
+        if c != avoid_color:
+            return c
+    # fallback
+    return LINE_COLORS[keys[0]]
+
+
+def render_left_decor_vertical():
+    rng = _get_decor_rng()
+
+    # 1) genera altezze (vh) per riempire ~100vh con segmenti piccoli
+    heights = []
+    total = 0.0
+    while total < 100.0:
+        h = rng.uniform(1.6, 4.4)  # "trattini" simili alle barre: piccoli e tanti
+        if total + h > 100.0:
+            h = 100.0 - total
+        heights.append(h)
+        total += h
+
+    n = len(heights)
+
+    # 2) scegli blocchi "doppi" (sparse), ognuno lungo 4 segmenti esatti
+    #    (così la colonna destra può rispettare camminata-metro-metro-camminata)
+    double = [False] * n
+    i = 0
+    while i <= n - 4:
+        # probabilità di inizio blocco doppio
+        if rng.random() < 0.18:
+            # evita sovrapposizioni e troppi blocchi attaccati
+            if (i > 0 and double[i - 1]) or (i > 1 and double[i - 2]):
+                i += 1
+                continue
+            for k in range(4):
+                double[i + k] = True
+            i += 4
+        else:
+            i += 1
+
+    # 3) colori colonna principale: no due uguali consecutivi
+    primary_colors = []
+    prev_p = None
+    for idx in range(n):
+        # un po' di camminata, ma non troppo
+        want_walk = (rng.random() < 0.22)
+
+        if want_walk and prev_p != WALK_COLOR:
+            c = WALK_COLOR
+        else:
+            # metro
+            c = _pick_metro_color(rng, avoid_color=prev_p)
+
+        # garantisci no consecutivi uguali
+        if c == prev_p:
+            if c == WALK_COLOR:
+                c = _pick_metro_color(rng, avoid_color=prev_p)
+            else:
+                c = WALK_COLOR if prev_p != WALK_COLOR else _pick_metro_color(rng, avoid_color=prev_p)
+
+        primary_colors.append(c)
+        prev_p = c
+
+    # 4) colori colonna destra SOLO nei blocchi doppi
+    #    pattern: walk, metro, metro, walk (ripetuto per ogni blocco)
+    secondary_colors = [None] * n
+    idx = 0
+    prev_s = None
+    while idx < n:
+        if not double[idx]:
+            prev_s = None  # quando torna singolo, "reset" per evitare vincoli strani
+            idx += 1
+            continue
+
+        # siamo dentro un blocco doppio: individua l'inizio del blocco (4 segmenti)
+        start = idx
+        # assicurati di partire davvero dall'inizio del blocco
+        while start > 0 and double[start - 1]:
+            start -= 1
+
+        # applica pattern sui 4
+        pattern = ["walk", "metro", "metro", "walk"]
+        for k in range(4):
+            j = start + k
+            if j >= n or not double[j]:
+                continue
+
+            if pattern[k] == "walk":
+                c = WALK_COLOR
+            else:
+                # metro: evita ripetizione consecutiva nella colonna destra
+                # e (se possibile) evita uguale al primario in quel punto
+                avoid = prev_s
+                c = _pick_metro_color(rng, avoid_color=avoid)
+                if c == primary_colors[j]:
+                    c = _pick_metro_color(rng, avoid_color=primary_colors[j])
+
+            # ulteriore check no consecutivi
+            if c == prev_s:
+                if c == WALK_COLOR:
+                    c = _pick_metro_color(rng, avoid_color=prev_s)
+                else:
+                    c = WALK_COLOR if prev_s != WALK_COLOR else _pick_metro_color(rng, avoid_color=prev_s)
+
+            secondary_colors[j] = c
+            prev_s = c
+
+        idx = start + 4
+
+    # 5) HTML
+    rows = []
+    for h, c1, c2 in zip(heights, primary_colors, secondary_colors):
+        # secondaria: solo quando presente; altrimenti ghost per non “saltare” troppo visivamente
+        s1 = f"<div class='vseg' style='height:{h:.3f}vh; background:{c1};'></div>"
+        if c2 is None:
+            s2 = "<div class='vseg ghost' style='height:{:.3f}vh;'></div>".format(h)
+        else:
+            s2 = f"<div class='vseg' style='height:{h:.3f}vh; background:{c2};'></div>"
+
+        rows.append(f"<div class='vrow'>{s1}{s2}</div>")
+
+    st.markdown(f"<div class='metro-decor-v'>{''.join(rows)}</div>", unsafe_allow_html=True)
+
+
+render_left_decor_vertical()
 
 # ============================================================
 # API: Géoplateforme - Autocompletion (IGN)
@@ -73,72 +414,62 @@ def geopf_completion(
     return data.get("results", []) or []
 
 
-def make_search_fn(map_key: str):
-    def _search(searchterm: str):
-        if not searchterm or len(searchterm.strip()) < 3:
-            st.session_state[map_key] = {}
-            return []
+def address_autocomplete(label: str, key: str, placeholder: str):
+    """
+    Autocomplete in tema chiaro: text_input + selectbox (niente componenti custom),
+    così il dropdown resta sempre chiaro.
+    """
+    map_key = f"{key}__map"
+    query_key = f"{key}__query"
+    choice_key = f"{key}__choice"
+    last_q_key = f"{key}__lastq"
 
-        results = geopf_completion(searchterm, terr="75", maximumResponses=8)
-        mp = {}
-        opts = []
+    q = st.text_input(
+        label if label else "",
+        key=query_key,
+        placeholder=placeholder,
+        label_visibility="collapsed" if not label else "visible",
+    )
+
+    prev_q = st.session_state.get(last_q_key, "")
+    if q != prev_q:
+        st.session_state[choice_key] = ""
+    st.session_state[last_q_key] = q
+
+    mp = {}
+    opts = []
+    if q and len(q.strip()) >= 3:
+        results = geopf_completion(q.strip(), terr="75", maximumResponses=8)
         for r in results:
             ft = r.get("fulltext")
             x = r.get("x")
             y = r.get("y")
             if ft and x is not None and y is not None:
-                opts.append(ft)
                 mp[ft] = (float(x), float(y))
+                opts.append(ft)
 
-        st.session_state[map_key] = mp
-        return opts
+    st.session_state[map_key] = mp
 
-    return _search
-
-
-def address_autocomplete(label: str, key: str, placeholder: str):
-    map_key = f"{key}__map"
-    search_fn = make_search_fn(map_key)
-
-    selected = st_searchbox(
-        search_fn,
-        placeholder=placeholder,
-        label=label,
-        key=key,
-        clear_on_submit=False,
-    )
-
+    selected = None
     coords = None
-    if selected:
-        coords = (st.session_state.get(map_key) or {}).get(selected)
+
+    if opts:
+        selected_opt = st.selectbox(
+            "",
+            options=[""] + opts,
+            key=choice_key,
+            label_visibility="collapsed",
+        )
+        if selected_opt:
+            selected = selected_opt
+            coords = mp.get(selected_opt)
 
     return selected, coords
 
 
 # ============================================================
-# ROUTE BARS (HTML/CSS, no plotly)
+# ROUTE BARS (HTML/CSS)
 # ============================================================
-LINE_COLORS = {
-    "1": "#FFCD00",
-    "2": "#003CA6",
-    "3": "#7A8B2E",
-    "3bis": "#8E9AE6",
-    "4": "#7C2E83",
-    "5": "#FF7E2E",
-    "6": "#6EC4B1",
-    "7": "#FA9ABA",
-    "7bis": "#6EC4B1",
-    "8": "#CEADD2",
-    "9": "#B7D84B",
-    "10": "#C9910D",
-    "11": "#704B1C",
-    "12": "#007852",
-    "13": "#8E9AE6",
-    "14": "#62259D",
-}
-WALK_COLOR = "#9CA3AF"
-
-
 def _norm_line_for_color(line):
     if line is None:
         return None
@@ -151,16 +482,13 @@ def _norm_line_for_color(line):
 
 
 def compress_edges_to_line_segments(edges):
-    """
-    Converte lista edges (con 'line' e 'time_min') in segmenti consecutivi per linea.
-    """
     segs = []
     cur_line = None
     cur_t = 0.0
 
     for e in edges:
         line = e.get("line")
-        t = float(e.get("time_min", 0.0))
+        t = float(e.get("time_min", 0.0) or 0.0)
 
         if cur_line is None:
             cur_line = line
@@ -181,18 +509,23 @@ def compress_edges_to_line_segments(edges):
 
 
 def _get_walk_split(details):
-    """
-    Prova a ricavare walk start/end separati.
-    Se non esistono nei dati, fa una split soft:
-    - se c'è metro: divide walk totale in 2 metà
-    - se non c'è metro: tutto walk start
-    """
     if not isinstance(details, dict):
         return 0.0, 0.0
 
-    # tenta vari nomi (best-effort)
-    keys_start = ["walk_time_start_min", "walk_start_time_min", "walk_start_min", "walk_min_start", "walk_time_min_start"]
-    keys_end = ["walk_time_end_min", "walk_end_time_min", "walk_end_min", "walk_min_end", "walk_time_min_end"]
+    keys_start = [
+        "walk_time_start_min",
+        "walk_start_time_min",
+        "walk_start_min",
+        "walk_min_start",
+        "walk_time_min_start",
+    ]
+    keys_end = [
+        "walk_time_end_min",
+        "walk_end_time_min",
+        "walk_end_min",
+        "walk_min_end",
+        "walk_time_min_end",
+    ]
 
     w_start = None
     w_end = None
@@ -210,11 +543,9 @@ def _get_walk_split(details):
     edges = details.get("edges", []) or []
     has_metro = len(edges) > 0
 
-    # se abbiamo già start/end espliciti, ok
     if w_start is not None or w_end is not None:
         return float(w_start or 0.0), float(w_end or 0.0)
 
-    # fallback: split soft
     if total_walk <= 0:
         return 0.0, 0.0
 
@@ -224,12 +555,6 @@ def _get_walk_split(details):
 
 
 def build_segments_for_friend(details):
-    """
-    Segmenti per barra:
-    - walk start
-    - metro (segmenti per linea)
-    - walk end
-    """
     mode = details.get("mode", "metro_walk")
 
     if mode == "walk_only":
@@ -258,9 +583,7 @@ def render_routes_html(results_df):
         return
 
     ok_df = ok_df.sort_values("i")
-    rows = []
 
-    # max totale per scalare le barre
     max_total = 0.0
     precomp = []
     used_lines = set()
@@ -280,13 +603,10 @@ def render_routes_html(results_df):
 
     max_total = max(max_total, 1e-9)
 
-    # legenda (camminata + linee metro usate)
     def _legend_pill(label, color):
         return f"""<span class="pill" style="background:{color}"></span><span class="pilltxt">{label}</span>"""
 
-    # ordina linee con logica “umana”
     def _line_sort_key(x):
-        # prova a mettere numeriche in ordine
         try:
             return (0, float(str(x).replace("bis", ".5")))
         except Exception:
@@ -299,9 +619,9 @@ def render_routes_html(results_df):
     </div>
     """
 
-    # righe
+    rows = []
     for i, total, segs in precomp:
-        name = f"Amic {i+1}"
+        name = f"Amico {i+1}"
         seg_html = ""
 
         for s in segs:
@@ -312,11 +632,11 @@ def render_routes_html(results_df):
             w_pct = (dt / max_total) * 100.0
             if s["kind"] == "walk":
                 color = WALK_COLOR
-                title = f"Camminata: {dt:.1f} min"
+                title = f"Camminata: {fmt_min(dt)} min"
             else:
                 lk = _norm_line_for_color(s.get("line")) or "?"
                 color = LINE_COLORS.get(lk, "#666666")
-                title = f"Metro {lk}: {dt:.1f} min"
+                title = f"Metro {lk}: {fmt_min(dt)} min"
 
             seg_html += f"""
               <div class="seg" title="{title}" style="width:{w_pct:.4f}%; background:{color};"></div>
@@ -327,13 +647,12 @@ def render_routes_html(results_df):
             <div class="r">
               <div class="who">{name}</div>
               <div class="bar">{seg_html}</div>
-              <div class="tot">{total:.1f} min</div>
+              <div class="tot">{fmt_min(total)} min</div>
             </div>
             """
         )
 
-    # altezza iframe: compatta (righe vicine)
-    iframe_height = int(min(380, 90 + 32 * len(rows)))
+    iframe_height = int(min(380, 95 + 32 * len(rows)))
 
     html = f"""
 <!doctype html>
@@ -342,12 +661,11 @@ def render_routes_html(results_df):
 <meta charset="utf-8"/>
 <style>
   :root {{
-    --text: rgba(20,20,20,0.88);
-    --muted: rgba(20,20,20,0.60);
-    --border: rgba(0,0,0,0.10);
+    --text: rgba(17,24,39,0.92);
+    --muted: rgba(17,24,39,0.70);
+    --border: rgba(17,24,39,0.18);
   }}
 
-  /* contenitore: ~ metà pagina */
   .wrap {{
     width: 48vw;
     max-width: 680px;
@@ -370,7 +688,7 @@ def render_routes_html(results_df):
     width: 12px;
     height: 12px;
     border-radius: 999px;
-    border: 1px solid rgba(0,0,0,0.10);
+    border: 1px solid var(--border);
     display:inline-block;
   }}
   .pilltxt {{ white-space: nowrap; }}
@@ -380,13 +698,13 @@ def render_routes_html(results_df):
     grid-template-columns: 80px 1fr 74px;
     gap: 10px;
     align-items: center;
-    margin: 6px 0;  /* righe più vicine */
+    margin: 6px 0;
   }}
 
   .who {{
     font: 14px/1.2 -apple-system,BlinkMacSystemFont,"Segoe UI",Roboto,Arial,sans-serif;
     color: var(--text);
-    font-weight: 600;
+    font-weight: 700;
   }}
 
   .tot {{
@@ -399,15 +717,15 @@ def render_routes_html(results_df):
   .bar {{
     display:flex;
     align-items:center;
-    gap: 4px;           /* micro separazione tra segmenti */
+    gap: 4px;
     height: 14px;
   }}
 
   .seg {{
     height: 14px;
-    border-radius: 999px;     /* smussate */
-    min-width: 6px;           /* così si vedono anche segmenti piccoli */
-    border: 1px solid rgba(0,0,0,0.10);
+    border-radius: 999px;
+    min-width: 6px;
+    border: 1px solid var(--border);
     box-sizing: border-box;
   }}
 </style>
@@ -424,7 +742,7 @@ def render_routes_html(results_df):
 
 
 # ============================================================
-# GINI BAR (in components.html => niente "undefined")
+# GINI BAR (components.html)
 # ============================================================
 def gini_to_color_hex(v):
     v = float(np.clip(v, 0.0, 1.0))
@@ -444,7 +762,7 @@ def gini_to_color_hex(v):
 
 
 def render_gini_bar(gini_value: float):
-    st.header("📊 Indice di Gini (Disuguaglianza)")
+    st.header("Indice di Gini (Disuguaglianza)")
 
     if not np.isfinite(gini_value):
         st.warning("Valore Gini non disponibile.")
@@ -463,21 +781,23 @@ def render_gini_bar(gini_value: float):
   .wrap {{
     max-width: 980px;
     font-family: -apple-system,BlinkMacSystemFont,"Segoe UI",Roboto,Arial,sans-serif;
+    color: rgba(17,24,39,0.92);
   }}
   .bar {{
     position: relative;
     height: 18px;
     border-radius: 999px;
     background: linear-gradient(90deg, #22c55e 0%, #f59e0b 55%, #ef4444 100%);
-    border: 1px solid rgba(0,0,0,0.15);
+    border: 1px solid rgba(17,24,39,0.18);
   }}
   .marker {{
     position:absolute;
     left:{pct:.2f}%;
     top:-20px;
     transform: translateX(-50%);
-    font-weight: 800;
+    font-weight: 900;
     font-size: 16px;
+    color: rgba(17,24,39,0.95);
   }}
   .tick {{
     position:absolute;
@@ -486,14 +806,14 @@ def render_gini_bar(gini_value: float):
     transform: translateX(-50%);
     width: 2px;
     height: 18px;
-    background: rgba(255,255,255,0.95);
+    background: rgba(17,24,39,0.95);
   }}
   .labels {{
     display:flex;
     justify-content:space-between;
     margin-top:6px;
     font-size: 13px;
-    opacity: 0.85;
+    color: rgba(17,24,39,0.78);
   }}
   .value {{
     margin-top: 10px;
@@ -518,18 +838,18 @@ def render_gini_bar(gini_value: float):
 </body>
 </html>
 """
-    components.html(html, height=110, scrolling=False)
+    components.html(html, height=115, scrolling=False)
 
 
 # ============================================================
 # HEADER
 # ============================================================
-st.markdown("<div class='pg-title'>🚇 pariGINI</div>", unsafe_allow_html=True)
+st.markdown("<div class='pg-title'>pariGINI</div>", unsafe_allow_html=True)
 st.markdown(
     """
-I tuoi amic ti propongono un bar lontano? calcola quanto è equa la scelta.  
-Calcola la disuguaglianza di spostamento in metro usando il Gini Index.  
-Inserisci da dove partite (min 2 amic) e dove andate, il Gini si calcola da se.
+I tuoi amici ti propongono un bar lontano? Calcola quanto è equa la scelta.  
+Misura la disuguaglianza dei tempi di spostamento in metro usando il Gini Index.  
+Inserisci da dove partite (minimo 2 amici) e dove andate: il Gini viene calcolato automaticamente.
 """
 )
 
@@ -547,7 +867,7 @@ with st.spinner("Caricamento rete metro..."):
     try:
         G, node_index = load_graph()
     except Exception as e:
-        st.error(f"❌ Errore nel caricamento rete: {e}")
+        st.error(f"Errore nel caricamento rete: {e}")
         st.stop()
 
 # ============================================================
@@ -575,26 +895,26 @@ def remove_friend():
 # ============================================================
 # INPUT: ORIGINS (AMICI)
 # ============================================================
-st.header("🧑‍🤝‍🧑 Da dove partite?")
+st.header("Da dove partite?")
 
 top_row = st.columns([1, 1, 8])
 with top_row[0]:
-    st.button("➕ Aggiungi", use_container_width=True, on_click=add_friend)
+    st.button("Aggiungi", use_container_width=True, on_click=add_friend)
 with top_row[1]:
     st.button(
-        "➖ Rimuovi",
+        "Rimuovi",
         use_container_width=True,
         disabled=(st.session_state.n_friends <= 2),
         on_click=remove_friend,
     )
 with top_row[2]:
-    st.caption("Minimo 2 amic. Scrivi e seleziona un suggerimento dall’autocompletamento.")
+    st.caption("Minimo 2 amici. Scrivi e seleziona un suggerimento dall’autocompletamento.")
 
 starts = []
 for i in range(st.session_state.n_friends):
     row = st.columns([1, 7])
     with row[0]:
-        st.markdown(f"**Amic {i+1}**")
+        st.markdown(f"**Amico {i+1}**")
     with row[1]:
         _, coords = address_autocomplete(
             label="",
@@ -607,7 +927,7 @@ for i in range(st.session_state.n_friends):
 # ============================================================
 # INPUT: TARGET
 # ============================================================
-st.header("🎯 Dove andate?")
+st.header("Dove andate?")
 
 _, target_coords = address_autocomplete(
     label="",
@@ -624,7 +944,7 @@ ready = (target is not None) and (len(starts) >= 2)
 if not ready:
     problems = []
     if len(starts) < 2:
-        problems.append("almeno 2 amic (con indirizzo selezionato)")
+        problems.append("almeno 2 amici (con indirizzo selezionato)")
     if target is None:
         problems.append("destinazione (seleziona un suggerimento)")
     st.warning("Manca: " + ", ".join(problems) + ".")
@@ -633,7 +953,7 @@ if not ready:
 # ANALYSIS & RESULTS
 # ============================================================
 if st.button(
-    "🚀 Calcola Gini",
+    "Calcola Gini",
     type="primary",
     use_container_width=True,
     disabled=not ready,
@@ -656,59 +976,55 @@ if st.button(
                 keep_details=True,
             )
         except Exception as e:
-            st.error(f"❌ Errore nel calcolo: {e}")
+            st.error(f"Errore nel calcolo: {e}")
             st.stop()
 
-    # 1) Gini FIRST (no undefined)
     gini_value = float(metrics.get("gini_time", np.nan))
     render_gini_bar(gini_value)
-
-    # 2) “Barre” libere (HTML/CSS) + walk start/metro/walk end
     render_routes_html(results_df)
 
-    # 3) Box: significato del Gini (testo come richiesto)
     if np.isfinite(gini_value):
+        verdict = "abbastanza equo" if gini_value <= 0.2 else "poco equo"
         st.info(
             f"""
-📖 **Cosa significa il Gini Index?**
+**Cosa significa il Gini Index?**
 
-Gini = 0: Tutti i tempi di percorrenza sono uguali ✅  
-Gini = 1: Massima disuguaglianza possibile ❌  
-Gini alto: tempi molto diversi → accessibilità disuguale  
-Gini basso: tempi simili → accessibilità più eguale  
-In questo caso: Gini = {gini_value:.4f} → {"ABBASTANZA EGUALE ✅" if gini_value <= 0.2 else "DISUGUALE ⚠️"}
+- Gini = 0: tutti i tempi di percorrenza sono uguali  
+- Gini = 1: massima disuguaglianza possibile  
+- Gini alto: tempi molto diversi, accessibilità disuguale  
+- Gini basso: tempi simili, accessibilità più uguale  
+
+In questo caso: Gini = {gini_value:.4f} → {verdict}.
 """
         )
     else:
         st.info(
             """
-📖 **Cosa significa il Gini Index?**
+**Cosa significa il Gini Index?**
 
-Gini = 0: Tutti i tempi di percorrenza sono uguali ✅
-Gini = 1: Massima disuguaglianza possibile ❌
-Gini alto: tempi molto diversi → accessibilità disuguale
-Gini basso: tempi simili → accessibilità più eguale
+- Gini = 0: tutti i tempi di percorrenza sono uguali  
+- Gini = 1: massima disuguaglianza possibile  
+- Gini alto: tempi molto diversi, accessibilità disuguale  
+- Gini basso: tempi simili, accessibilità più uguale
 """
         )
 
-    # 4) Statistiche: SOLO min / medio / max
-    st.subheader("📈 Statistiche Tempi di Percorrenza")
+    st.subheader("Statistiche tempi di percorrenza")
     c1, c2, c3 = st.columns(3)
     with c1:
-        st.metric("Minimo", f"{metrics['min_time_min']:.1f} min")
+        st.metric("Minimo", f"{fmt_min(metrics.get('min_time_min', np.nan))} min")
     with c2:
-        st.metric("Medio", f"{metrics['mean_time_min']:.1f} min")
+        st.metric("Medio", f"{fmt_min(metrics.get('mean_time_min', np.nan))} min")
     with c3:
-        st.metric("Massimo", f"{metrics['max_time_min']:.1f} min")
+        st.metric("Massimo", f"{fmt_min(metrics.get('max_time_min', np.nan))} min")
 
-    # 5) Export (in expander)
-    with st.expander("💾 Esporta Risultati", expanded=False):
+    with st.expander("Esporta risultati", expanded=False):
         col1, col2 = st.columns(2)
 
         with col1:
             csv = results_df.to_csv(index=False)
             st.download_button(
-                label="📥 Scarica CSV (dettagli)",
+                label="Scarica CSV (dettagli)",
                 data=csv,
                 file_name="metro_accessibility_results.csv",
                 mime="text/csv",
@@ -736,7 +1052,7 @@ Gini basso: tempi simili → accessibilità più eguale
             }
             json_data = json.dumps(summary, indent=2)
             st.download_button(
-                label="📥 Scarica JSON (sintesi)",
+                label="Scarica JSON (sintesi)",
                 data=json_data,
                 file_name="metro_accessibility_summary.json",
                 mime="application/json",
@@ -749,10 +1065,8 @@ st.divider()
 st.markdown(
     """
 ---
-**pariGINI** | Basato su routing Dijkstra con cambi linea ottimizzati  
-📍 Dati: RATP Metro Network (timed_edgelist.geojson)  
-🧭 Autocomplete: Géoplateforme (IGN) - completion
-
-Sviluppato da Francesco Farina e Francesco Paolo Savatteri, per omett e per tutt3.
+**pariGINI** | Routing Dijkstra con cambi linea ottimizzati  
+Dati: RATP Metro Network (timed_edgelist.geojson)  
+Autocomplete: Géoplateforme (IGN) - completion
 """
 )
