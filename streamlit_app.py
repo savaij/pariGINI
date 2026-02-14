@@ -428,5 +428,7 @@ st.markdown(
 📊 Misura di disuguaglianza: Gini Index + Theil Index  
 📍 Dati: RATP Metro Network (timed_edgelist.geojson)  
 🧭 Autocomplete: Géoplateforme (IGN) - completion
+
+Sviluppato da Francesco Farina e Francesco Paolo Savatteri, per omett e per tutt3
 """
 )
