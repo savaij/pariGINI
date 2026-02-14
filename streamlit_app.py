@@ -239,6 +239,13 @@ div[data-baseweb="select"] svg {
 .metro-decor .pill.small { height: 10px; }
 .metro-decor .pill.med   { height: 16px; }
 .metro-decor .pill.long  { height: 24px; }
+
+/* Nascondi decorazione su schermi piccoli (mobile) */
+@media (max-width: 768px) {
+  .metro-decor {
+    display: none !important;
+  }
+}
 </style>
 """,
     unsafe_allow_html=True,
