@@ -63,11 +63,18 @@ def make_search_fn(map_key: str):
     Salva in session_state[map_key] una mappa fulltext -> (lon,lat)
     """
     def _search(searchterm: str):
-        if not searchterm or len(searchterm.strip()) < 3:
+        raw = (searchterm or "").strip()
+        if not raw or len(raw) < 3:
             st.session_state[map_key] = {}
             return []
 
-        results = geopf_completion(searchterm, terr="75", maximumResponses=8)
+        # Aggiunge "paris" automaticamente se non è già presente (case-insensitive)
+        if "paris" not in raw.lower():
+            query = f"{raw} paris"
+        else:
+            query = raw
+
+        results = geopf_completion(query, terr="75", maximumResponses=8)
         mp = {}
         opts = []
         for r in results:
