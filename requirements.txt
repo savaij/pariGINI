@@ -4,3 +4,4 @@ numpy
 streamlit-searchbox
 geopandas
 networkx
+plotly
