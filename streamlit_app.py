@@ -280,15 +280,34 @@ if st.button(
     col1, col2, col3 = st.columns(3)
     gini_value = metrics.get("gini_time", np.nan)
 
-    with col1:
+    # Se gini_value è NaN, evitiamo confronti e mostriamo un messaggio neutro
+    if pd.isna(gini_value):
+        interpretation = "N/D"
+        status = "info"
+    else:
         if gini_value < 0.1:
             interpretation = "Molto Eguale"
+            status = "success"   # verde
         elif gini_value < 0.2:
             interpretation = "Abbastanza Eguale"
+            status = "warning"   # giallo
         else:
             interpretation = "Disuguale"
+            status = "error"     # rosso
 
-        st.metric("Gini Index", f"{gini_value:.4f}", delta=interpretation, delta_color="inverse")
+    with col1:
+        # Mostro il numero come metrica (senza delta_color, perché non colora per testo)
+        st.metric("Gini Index", f"{gini_value:.4f}" if pd.notna(gini_value) else "N/D")
+
+        # E sotto mostro l’interpretazione con colore certo
+        if status == "success":
+            st.success(interpretation)
+        elif status == "warning":
+            st.warning(interpretation)
+        elif status == "error":
+            st.error(interpretation)
+        else:
+            st.info(interpretation)
 
     with col2:
         st.metric("Punti analizzati", metrics["n_ok"])
@@ -324,7 +343,7 @@ if st.button(
 
     display_df.columns = [
         "ID", "Lon", "Lat", "Tempo Tot (min)",
-        "Metro (min)", "Camminata (min)", "Cambiamenti", "Successo"
+        "Metro (min)", "Camminata (min)", "Cambi", "Successo"
     ]
     display_df["Successo"] = display_df["Successo"].map({True: "✅", False: "❌"})
 
