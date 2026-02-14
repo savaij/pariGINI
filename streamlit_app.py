@@ -1,31 +1,41 @@
 """
 Streamlit App: pariGINI
 Calcola e visualizza il Gini Index per la disuguaglianza di accessibilità in metro a Parigi
-
-UX:
-- "Da dove partite?" con Amico 1..N (minimo 2), aggiungi/rimuovi
-- Autocomplete "in-box" su Géoplateforme (IGN)
-- "Dove andate?" con target (autocomplete)
-- Parametri routing fissi: max_line_changes=1, change_penalty_min=2.0 (non mostrati)
-- NO MAP: grafica “a barre” per ogni amico:
-  - camminata (grigio)
-  - tratte metro colorate per linea (e segmentate se cambia linea)
-  - lunghezze proporzionali ai minuti reali
 """
 
 import json
 import requests
 import streamlit as st
+import streamlit.components.v1 as components
 import pandas as pd
 import numpy as np
 
-import plotly.graph_objects as go
 from streamlit_searchbox import st_searchbox  # pip install streamlit-searchbox
 
 from gini_paris_distances_calculations import (
     build_graph_from_edgelist,
     build_node_index,
     accessibility_inequality_to_target,
+)
+
+# ============================================================
+# PAGE CONFIG (UNA SOLA VOLTA, SUBITO)
+# ============================================================
+st.set_page_config(
+    page_title="pariGINI",
+    page_icon="🚇",
+    layout="wide",
+    initial_sidebar_state="collapsed",
+)
+
+st.markdown(
+    """
+<style>
+.pg-title { font-size: 3.0rem; font-weight: 800; line-height: 1.05; margin: 0.2rem 0 0.4rem 0; }
+.block-container { padding-top: 1.2rem; }
+</style>
+""",
+    unsafe_allow_html=True,
 )
 
 # ============================================================
@@ -63,25 +73,13 @@ def geopf_completion(
     return data.get("results", []) or []
 
 
-
 def make_search_fn(map_key: str):
-    """
-    Crea una search_function per streamlit-searchbox.
-    Salva in session_state[map_key] una mappa fulltext -> (lon,lat)
-    """
     def _search(searchterm: str):
-        raw = (searchterm or "").strip()
-        if not raw or len(raw) < 3:
+        if not searchterm or len(searchterm.strip()) < 3:
             st.session_state[map_key] = {}
             return []
 
-        # Aggiunge "paris" automaticamente se non è già presente (case-insensitive)
-        if "paris" not in raw.lower():
-            query = f"{raw} paris"
-        else:
-            query = raw
-
-        results = geopf_completion(query, terr="75", maximumResponses=8)
+        results = geopf_completion(searchterm, terr="75", maximumResponses=8)
         mp = {}
         opts = []
         for r in results:
@@ -118,27 +116,27 @@ def address_autocomplete(label: str, key: str, placeholder: str):
 
 
 # ============================================================
-# ROUTE BAR (walk + metro segments)
+# ROUTE BARS (HTML/CSS, no plotly)
 # ============================================================
 LINE_COLORS = {
-    "1":  "#FFCD00",
-    "2":  "#003CA6",
-    "3":  "#7A8B2E",
+    "1": "#FFCD00",
+    "2": "#003CA6",
+    "3": "#7A8B2E",
     "3bis": "#8E9AE6",
-    "4":  "#7C2E83",
-    "5":  "#FF7E2E",
-    "6":  "#6EC4B1",
-    "7":  "#FA9ABA",
+    "4": "#7C2E83",
+    "5": "#FF7E2E",
+    "6": "#6EC4B1",
+    "7": "#FA9ABA",
     "7bis": "#6EC4B1",
-    "8":  "#CEADD2",
-    "9":  "#B7D84B",
+    "8": "#CEADD2",
+    "9": "#B7D84B",
     "10": "#C9910D",
     "11": "#704B1C",
     "12": "#007852",
     "13": "#8E9AE6",
     "14": "#62259D",
 }
-WALK_COLOR = "#9CA3AF"  # grigio
+WALK_COLOR = "#9CA3AF"
 
 
 def _norm_line_for_color(line):
@@ -154,8 +152,7 @@ def _norm_line_for_color(line):
 
 def compress_edges_to_line_segments(edges):
     """
-    Converte lista edges (con 'line' e 'time_min') in segmenti consecutivi per linea:
-    ritorna list di dict: {kind: "metro", line: "8", time_min: 12.3}
+    Converte lista edges (con 'line' e 'time_min') in segmenti consecutivi per linea.
     """
     segs = []
     cur_line = None
@@ -164,6 +161,7 @@ def compress_edges_to_line_segments(edges):
     for e in edges:
         line = e.get("line")
         t = float(e.get("time_min", 0.0))
+
         if cur_line is None:
             cur_line = line
             cur_t = t
@@ -182,167 +180,351 @@ def compress_edges_to_line_segments(edges):
     return segs
 
 
+def _get_walk_split(details):
+    """
+    Prova a ricavare walk start/end separati.
+    Se non esistono nei dati, fa una split soft:
+    - se c'è metro: divide walk totale in 2 metà
+    - se non c'è metro: tutto walk start
+    """
+    if not isinstance(details, dict):
+        return 0.0, 0.0
+
+    # tenta vari nomi (best-effort)
+    keys_start = ["walk_time_start_min", "walk_start_time_min", "walk_start_min", "walk_min_start", "walk_time_min_start"]
+    keys_end = ["walk_time_end_min", "walk_end_time_min", "walk_end_min", "walk_min_end", "walk_time_min_end"]
+
+    w_start = None
+    w_end = None
+
+    for k in keys_start:
+        if k in details and details.get(k) is not None:
+            w_start = float(details.get(k) or 0.0)
+            break
+    for k in keys_end:
+        if k in details and details.get(k) is not None:
+            w_end = float(details.get(k) or 0.0)
+            break
+
+    total_walk = float(details.get("walk_time_min", 0.0) or 0.0)
+    edges = details.get("edges", []) or []
+    has_metro = len(edges) > 0
+
+    # se abbiamo già start/end espliciti, ok
+    if w_start is not None or w_end is not None:
+        return float(w_start or 0.0), float(w_end or 0.0)
+
+    # fallback: split soft
+    if total_walk <= 0:
+        return 0.0, 0.0
+
+    if has_metro:
+        return total_walk / 2.0, total_walk / 2.0
+    return total_walk, 0.0
+
+
 def build_segments_for_friend(details):
     """
-    Segmenti ordinati che compongono la barra:
-    - walk (grigio): tempo walk totale (start + end) o walk-only
-    - metro: segmenti per linea (colori RATP)
+    Segmenti per barra:
+    - walk start
+    - metro (segmenti per linea)
+    - walk end
     """
     mode = details.get("mode", "metro_walk")
+
     if mode == "walk_only":
-        return [{"kind": "walk", "time_min": float(details.get("walk_time_min", 0.0))}]
+        w = float(details.get("walk_time_min", 0.0) or 0.0)
+        return [{"kind": "walk", "time_min": w}]
 
     segs = []
-    walk_t = float(details.get("walk_time_min", 0.0))
-    if walk_t > 0:
-        segs.append({"kind": "walk", "time_min": walk_t})
+    w_start, w_end = _get_walk_split(details)
+
+    if w_start > 0:
+        segs.append({"kind": "walk", "time_min": float(w_start)})
 
     edges = details.get("edges", []) or []
     segs.extend(compress_edges_to_line_segments(edges))
+
+    if w_end > 0:
+        segs.append({"kind": "walk", "time_min": float(w_end)})
+
     return segs
 
 
-def plot_routes_bars(results_df):
-    """
-    Grafico tipo "Gantt" orizzontale:
-    ogni riga = un amico
-    segmenti = walk (grigio) + metro (colorato per linea)
-    lunghezza segmenti proporzionale ai minuti.
-    """
+def render_routes_html(results_df):
     ok_df = results_df[results_df["ok"] == True].copy()
     if ok_df.empty:
-        fig = go.Figure()
-        fig.update_layout(
-            height=250,
-            margin=dict(l=10, r=10, t=30, b=10),
-            title="Nessun percorso disponibile da visualizzare",
-        )
-        return fig
+        st.info("Nessun percorso disponibile da visualizzare.")
+        return
 
-    # ordine righe: Amico 1,2,3...
     ok_df = ok_df.sort_values("i")
+    rows = []
 
-    # asse y: nomi amici
-    friend_names = [f"Amico {int(i)+1}" for i in ok_df["i"].tolist()]
+    # max totale per scalare le barre
+    max_total = 0.0
+    precomp = []
+    used_lines = set()
 
-    # per altezza figura: ~50px per amico
-    height = max(320, 60 + 55 * len(friend_names))
+    for _, r in ok_df.iterrows():
+        details = r["details"]
+        total = float(details.get("total_time_min", r.get("total_time_min", 0.0)) or 0.0)
+        max_total = max(max_total, total)
 
-    fig = go.Figure()
+        segs = build_segments_for_friend(details)
+        for s in segs:
+            if s["kind"] == "metro":
+                lk = _norm_line_for_color(s.get("line")) or "?"
+                used_lines.add(lk)
 
-    # costruisco rettangoli con bar "stacked" usando scatter (linee spesse)
-    # y_pos: numerico per controllo più preciso
-    y_pos = list(range(len(friend_names)))
-    y_map = {friend_names[k]: y_pos[k] for k in range(len(friend_names))}
+        precomp.append((int(r["i"]), total, segs))
 
-    # per legenda pulita: 1 entry walk + 1 entry per linea usata
-    shown_legend = set()
+    max_total = max(max_total, 1e-9)
 
-    for _, row in ok_df.iterrows():
-        i = int(row["i"])
+    # legenda (camminata + linee metro usate)
+    def _legend_pill(label, color):
+        return f"""<span class="pill" style="background:{color}"></span><span class="pilltxt">{label}</span>"""
+
+    # ordina linee con logica “umana”
+    def _line_sort_key(x):
+        # prova a mettere numeriche in ordine
+        try:
+            return (0, float(str(x).replace("bis", ".5")))
+        except Exception:
+            return (1, str(x))
+
+    legend_html = f"""
+    <div class="legend">
+      <div class="legend-item">{_legend_pill("Camminata", WALK_COLOR)}</div>
+      {"".join([f'<div class="legend-item">{_legend_pill("Metro " + str(l), LINE_COLORS.get(l, "#666"))}</div>' for l in sorted(list(used_lines), key=_line_sort_key)])}
+    </div>
+    """
+
+    # righe
+    for i, total, segs in precomp:
         name = f"Amico {i+1}"
-        y = y_map[name]
-        details = row["details"]
+        seg_html = ""
 
-        segments = build_segments_for_friend(details)
-        x0 = 0.0
-
-        # hover summary
-        total = float(details.get("total_time_min", row.get("total_time_min", 0.0)))
-        mode = details.get("mode", "metro_walk")
-
-        for seg in segments:
-            dt = float(seg["time_min"])
+        for s in segs:
+            dt = float(s.get("time_min", 0.0) or 0.0)
             if dt <= 0:
                 continue
 
-            x1 = x0 + dt
-
-            if seg["kind"] == "walk":
+            w_pct = (dt / max_total) * 100.0
+            if s["kind"] == "walk":
                 color = WALK_COLOR
-                label = "Camminata"
-                hover = (
-                    f"<b>{name}</b><br>"
-                    f"Camminata: {dt:.1f} min<br>"
-                    f"Totale: {total:.1f} min<br>"
-                    f"Mode: {mode}<extra></extra>"
-                )
+                title = f"Camminata: {dt:.1f} min"
             else:
-                line = seg.get("line", "?")
-                line_key = _norm_line_for_color(line) or "?"
-                color = LINE_COLORS.get(line_key, "#666666")
-                label = f"Metro {line_key}"
-                hover = (
-                    f"<b>{name}</b><br>"
-                    f"Metro linea {line}<br>"
-                    f"Segmento: {dt:.1f} min<br>"
-                    f"Totale: {total:.1f} min<extra></extra>"
-                )
+                lk = _norm_line_for_color(s.get("line")) or "?"
+                color = LINE_COLORS.get(lk, "#666666")
+                title = f"Metro {lk}: {dt:.1f} min"
 
-            showlegend = label not in shown_legend
-            if showlegend:
-                shown_legend.add(label)
+            seg_html += f"""
+              <div class="seg" title="{title}" style="width:{w_pct:.4f}%; background:{color};"></div>
+            """
 
-            # Segmento come linea spessa (più semplice e “pulito” in Streamlit)
-            fig.add_trace(
-                go.Scatter(
-                    x=[x0, x1],
-                    y=[y, y],
-                    mode="lines",
-                    line=dict(color=color, width=18),
-                    name=label,
-                    showlegend=showlegend,
-                    hovertemplate=hover,
-                )
-            )
-
-            x0 = x1
-
-        # etichetta tempo totale a destra (solo testo)
-        fig.add_trace(
-            go.Scatter(
-                x=[x0 + 0.5],
-                y=[y],
-                mode="text",
-                text=[f"{total:.1f} min"],
-                textposition="middle right",
-                showlegend=False,
-                hoverinfo="skip",
-            )
+        rows.append(
+            f"""
+            <div class="r">
+              <div class="who">{name}</div>
+              <div class="bar">{seg_html}</div>
+              <div class="tot">{total:.1f} min</div>
+            </div>
+            """
         )
 
-    fig.update_layout(
-        height=height,
-        margin=dict(l=10, r=10, t=70, b=10),
-        title="Tragitti (camminata + metro per linea) — lunghezze proporzionali ai minuti \n",
-        xaxis=dict(
-            title="Minuti",
-            zeroline=False,
-            showgrid=True,
-        ),
-        yaxis=dict(
-            tickmode="array",
-            tickvals=y_pos,
-            ticktext=friend_names,
-            autorange="reversed",  # Amico 1 in alto
-            showgrid=False,
-        ),
-        legend=dict(orientation="h", yanchor="bottom", y=1.02, xanchor="left", x=0.0),
-    )
-    return fig
+    # altezza iframe: compatta (righe vicine)
+    iframe_height = int(min(380, 90 + 32 * len(rows)))
+
+    html = f"""
+<!doctype html>
+<html>
+<head>
+<meta charset="utf-8"/>
+<style>
+  :root {{
+    --text: rgba(20,20,20,0.88);
+    --muted: rgba(20,20,20,0.60);
+    --border: rgba(0,0,0,0.10);
+  }}
+
+  /* contenitore: ~ metà pagina */
+  .wrap {{
+    width: 48vw;
+    max-width: 680px;
+    min-width: 340px;
+  }}
+
+  .legend {{
+    display:flex;
+    flex-wrap: wrap;
+    gap: 10px 14px;
+    align-items: center;
+    margin: 0 0 10px 0;
+  }}
+  .legend-item {{
+    display:flex; gap:8px; align-items:center;
+    font: 13px/1.2 -apple-system,BlinkMacSystemFont,"Segoe UI",Roboto,Arial,sans-serif;
+    color: var(--muted);
+  }}
+  .pill {{
+    width: 12px;
+    height: 12px;
+    border-radius: 999px;
+    border: 1px solid rgba(0,0,0,0.10);
+    display:inline-block;
+  }}
+  .pilltxt {{ white-space: nowrap; }}
+
+  .r {{
+    display: grid;
+    grid-template-columns: 80px 1fr 74px;
+    gap: 10px;
+    align-items: center;
+    margin: 6px 0;  /* righe più vicine */
+  }}
+
+  .who {{
+    font: 14px/1.2 -apple-system,BlinkMacSystemFont,"Segoe UI",Roboto,Arial,sans-serif;
+    color: var(--text);
+    font-weight: 600;
+  }}
+
+  .tot {{
+    font: 13px/1.2 -apple-system,BlinkMacSystemFont,"Segoe UI",Roboto,Arial,sans-serif;
+    color: var(--muted);
+    text-align: right;
+    white-space: nowrap;
+  }}
+
+  .bar {{
+    display:flex;
+    align-items:center;
+    gap: 4px;           /* micro separazione tra segmenti */
+    height: 14px;
+  }}
+
+  .seg {{
+    height: 14px;
+    border-radius: 999px;     /* smussate */
+    min-width: 6px;           /* così si vedono anche segmenti piccoli */
+    border: 1px solid rgba(0,0,0,0.10);
+    box-sizing: border-box;
+  }}
+</style>
+</head>
+<body style="margin:0; background:transparent;">
+  <div class="wrap">
+    {legend_html}
+    {''.join(rows)}
+  </div>
+</body>
+</html>
+"""
+    components.html(html, height=iframe_height, scrolling=False)
 
 
 # ============================================================
-# PAGE CONFIG
+# GINI BAR (in components.html => niente "undefined")
 # ============================================================
-st.set_page_config(
-    page_title="pariGINI",
-    page_icon="🚇",
-    layout="wide",
-    initial_sidebar_state="collapsed",
-)
+def gini_to_color_hex(v):
+    v = float(np.clip(v, 0.0, 1.0))
+    green = np.array([34, 197, 94])   # #22c55e
+    amber = np.array([245, 158, 11])  # #f59e0b
+    red = np.array([239, 68, 68])     # #ef4444
 
-st.title("🚇 pariGINI ")
+    if v <= 0.55:
+        t = v / 0.55 if 0.55 else 0
+        rgb = green + (amber - green) * t
+    else:
+        t = (v - 0.55) / (1 - 0.55)
+        rgb = amber + (red - amber) * t
+
+    rgb = np.clip(rgb.round().astype(int), 0, 255)
+    return "#{:02x}{:02x}{:02x}".format(rgb[0], rgb[1], rgb[2])
+
+
+def render_gini_bar(gini_value: float):
+    st.header("📊 Indice di Gini (Disuguaglianza)")
+
+    if not np.isfinite(gini_value):
+        st.warning("Valore Gini non disponibile.")
+        return
+
+    v = float(np.clip(gini_value, 0.0, 1.0))
+    pct = v * 100.0
+    color = gini_to_color_hex(v)
+
+    html = f"""
+<!doctype html>
+<html>
+<head>
+<meta charset="utf-8"/>
+<style>
+  .wrap {{
+    max-width: 980px;
+    font-family: -apple-system,BlinkMacSystemFont,"Segoe UI",Roboto,Arial,sans-serif;
+  }}
+  .bar {{
+    position: relative;
+    height: 18px;
+    border-radius: 999px;
+    background: linear-gradient(90deg, #22c55e 0%, #f59e0b 55%, #ef4444 100%);
+    border: 1px solid rgba(0,0,0,0.15);
+  }}
+  .marker {{
+    position:absolute;
+    left:{pct:.2f}%;
+    top:-20px;
+    transform: translateX(-50%);
+    font-weight: 800;
+    font-size: 16px;
+  }}
+  .tick {{
+    position:absolute;
+    left:{pct:.2f}%;
+    top:0px;
+    transform: translateX(-50%);
+    width: 2px;
+    height: 18px;
+    background: rgba(255,255,255,0.95);
+  }}
+  .labels {{
+    display:flex;
+    justify-content:space-between;
+    margin-top:6px;
+    font-size: 13px;
+    opacity: 0.85;
+  }}
+  .value {{
+    margin-top: 10px;
+    font-size: 22px;
+    font-weight: 900;
+    color: {color};
+  }}
+</style>
+</head>
+<body style="margin:0;background:transparent;">
+  <div class="wrap">
+    <div class="bar">
+      <div class="marker">▼</div>
+      <div class="tick"></div>
+    </div>
+    <div class="labels">
+      <div>Massima uguaglianza</div>
+      <div>Massima disuguaglianza</div>
+    </div>
+    <div class="value">{v:.4f}</div>
+  </div>
+</body>
+</html>
+"""
+    components.html(html, height=110, scrolling=False)
+
+
+# ============================================================
+# HEADER
+# ============================================================
+st.markdown("<div class='pg-title'>🚇 pariGINI</div>", unsafe_allow_html=True)
 st.markdown(
     """
 I tuoi amic ti propongono un bar lontano? calcola quanto è equa la scelta.  
@@ -460,8 +642,6 @@ if st.button(
 
     with st.spinner("Calcolo tempi di percorrenza..."):
         try:
-            # qui assumo che nel file gini_paris_distances_calculations.py
-            # tu abbia già implementato l'opzione “walk range” (15 min) e walk-only.
             results_df, metrics = accessibility_inequality_to_target(
                 G,
                 starts,
@@ -473,172 +653,94 @@ if st.button(
                 max_walk_min_end=15.0,
                 max_candidate_stations=25,
                 allow_walk_only=True,
-                keep_details=True,  # necessario per segmenti linee
+                keep_details=True,
             )
         except Exception as e:
             st.error(f"❌ Errore nel calcolo: {e}")
             st.stop()
 
-    # =====================================
-    # ROUTE BARS (NO MAP)
-    # =====================================
-    st.subheader("🧾 Tragitti (grafica proporzionale ai minuti)")
-    bars_fig = plot_routes_bars(results_df)
-    st.plotly_chart(bars_fig, use_container_width=True, config={"displayModeBar": False})
+    # 1) Gini FIRST (no undefined)
+    gini_value = float(metrics.get("gini_time", np.nan))
+    render_gini_bar(gini_value)
 
-    # =====================================
-    # SECTION 1: Gini Index & Explanation
-    # =====================================
-    st.header("📊 Indice di Gini (Disuguaglianza)")
+    # 2) “Barre” libere (HTML/CSS) + walk start/metro/walk end
+    render_routes_html(results_df)
 
-    col1, col2, col3 = st.columns(3)
-    gini_value = metrics.get("gini_time", np.nan)
-
-    # Se gini_value è NaN, evitiamo confronti e mostriamo un messaggio neutro
-    if pd.isna(gini_value):
-        interpretation = "N/D"
-        status = "info"
-    else:
-        if gini_value < 0.1:
-            interpretation = "Molto Eguale"
-            status = "success"   # verde
-        elif gini_value < 0.2:
-            interpretation = "Abbastanza Eguale"
-            status = "warning"   # giallo
-        else:
-            interpretation = "Disuguale"
-            status = "error"     # rosso
-
-    with col1:
-        # Mostro il numero come metrica (senza delta_color, perché non colora per testo)
-        st.metric("Gini Index", f"{gini_value:.4f}" if pd.notna(gini_value) else "N/D")
-
-        # E sotto mostro l’interpretazione con colore certo
-        if status == "success":
-            st.success(interpretation)
-        elif status == "warning":
-            st.warning(interpretation)
-        elif status == "error":
-            st.error(interpretation)
-        else:
-            st.info(interpretation)
-
-    with col2:
-        st.metric("Punti analizzati", metrics["n_ok"])
-
-    with col3:
-        st.metric(
-            "Tempo medio",
-            f"{metrics['mean_time_min']:.1f} min",
-            delta=f"Max: {metrics['max_time_min']:.1f} min",
-        )
-
-    st.info(
-        """
+    # 3) Box: significato del Gini (testo come richiesto)
+    if np.isfinite(gini_value):
+        st.info(
+            f"""
 📖 **Cosa significa il Gini Index?**
 
-- **Gini = 0**: Tutti i tempi di percorrenza sono **uguali** ✅
-- **Gini = 1**: Massima disuguaglianza possibile ❌
-- **Gini alto**: tempi molto diversi → **accessibilità disuguale**
-- **Gini basso**: tempi simili → **accessibilità più eguale**
+Gini = 0: Tutti i tempi di percorrenza sono uguali ✅  
+Gini = 1: Massima disuguaglianza possibile ❌  
+Gini alto: tempi molto diversi → accessibilità disuguale  
+Gini basso: tempi simili → accessibilità più eguale  
+In questo caso: Gini = {gini_value:.4f} → {"ABBASTANZA EGUALE ✅" if gini_value <= 0.2 else "DISUGUALE ⚠️"}
+"""
+        )
+    else:
+        st.info(
+            """
+📖 **Cosa significa il Gini Index?**
 
-**In questo caso: Gini = {:.4f}** → {}
-""".format(gini_value, "DISUGUALE ⚠️" if gini_value > 0.2 else "ABBASTANZA EGUALE ✅")
-    )
+Gini = 0: Tutti i tempi di percorrenza sono uguali ✅
+Gini = 1: Massima disuguaglianza possibile ❌
+Gini alto: tempi molto diversi → accessibilità disuguale
+Gini basso: tempi simili → accessibilità più eguale
+"""
+        )
 
-    # =====================================
-    # SECTION 2: Detailed Results Table
-    # =====================================
-    st.subheader("📋 Dettagli Percorsi")
-
-    display_df = results_df[
-        ["i", "start_lon", "start_lat", "total_time_min", "metro_time_min", "walk_time_min",
-         "line_changes", "mode", "ok", "error"]
-    ].copy()
-
-    display_df.columns = [
-        "ID", "Lon", "Lat", "Tempo Tot (min)", "Metro (min)", "Camminata (min)",
-        "Cambiamenti", "Mode", "Successo", "Errore"
-    ]
-    display_df["Successo"] = display_df["Successo"].map({True: "✅", False: "❌"})
-
-    st.dataframe(display_df, use_container_width=True, hide_index=True)
-
-    # =====================================
-    # SECTION 3: Statistics
-    # =====================================
+    # 4) Statistiche: SOLO min / medio / max
     st.subheader("📈 Statistiche Tempi di Percorrenza")
+    c1, c2, c3 = st.columns(3)
+    with c1:
+        st.metric("Minimo", f"{metrics['min_time_min']:.1f} min")
+    with c2:
+        st.metric("Medio", f"{metrics['mean_time_min']:.1f} min")
+    with c3:
+        st.metric("Massimo", f"{metrics['max_time_min']:.1f} min")
 
-    col1, col2 = st.columns(2)
+    # 5) Export (in expander)
+    with st.expander("💾 Esporta Risultati", expanded=False):
+        col1, col2 = st.columns(2)
 
-    with col1:
-        stat_data = {
-            "Metrica": ["Tempo Minimo", "Tempo Mediano", "Tempo Medio", "Tempo Massimo", "Percentile 90%"],
-            "Valore (min)": [
-                f"{metrics['min_time_min']:.2f}",
-                f"{metrics['median_time_min']:.2f}",
-                f"{metrics['mean_time_min']:.2f}",
-                f"{metrics['max_time_min']:.2f}",
-                f"{metrics['p90_time_min']:.2f}",
-            ],
-        }
-        st.table(pd.DataFrame(stat_data))
+        with col1:
+            csv = results_df.to_csv(index=False)
+            st.download_button(
+                label="📥 Scarica CSV (dettagli)",
+                data=csv,
+                file_name="metro_accessibility_results.csv",
+                mime="text/csv",
+            )
 
-    with col2:
-        theil = metrics.get("theil_time", np.nan)
-        st.metric("Indice Theil", f"{theil:.4f}", help="Misura alternativa di disuguaglianza (0=perfetta uguaglianza)")
-        st.metric(
-            "Successo routing",
-            f"{metrics['n_ok']}/{metrics['n_total']}",
-            help=f"{metrics['share_ok']*100:.1f}% dei percorsi calcolati con successo",
-        )
-
-    # =====================================
-    # SECTION 4: Export Data
-    # =====================================
-    st.divider()
-    st.subheader("💾 Esporta Risultati")
-
-    col1, col2 = st.columns(2)
-
-    with col1:
-        csv = results_df.to_csv(index=False)
-        st.download_button(
-            label="📥 Scarica CSV (dettagli)",
-            data=csv,
-            file_name="metro_accessibility_results.csv",
-            mime="text/csv",
-        )
-
-    with col2:
-        summary = {
-            "gini_index": float(gini_value) if pd.notna(gini_value) else None,
-            "theil_index": float(theil) if pd.notna(theil) else None,
-            "mean_time_min": float(metrics["mean_time_min"]),
-            "median_time_min": float(metrics["median_time_min"]),
-            "min_time_min": float(metrics["min_time_min"]),
-            "max_time_min": float(metrics["max_time_min"]),
-            "n_successful": int(metrics["n_ok"]),
-            "n_total": int(metrics["n_total"]),
-            "target_lon": float(target[0]),
-            "target_lat": float(target[1]),
-            "n_starts": int(len(starts)),
-            "routing": {
-                "max_line_changes": max_line_changes,
-                "change_penalty_min": change_penalty_min,
-                "max_walk_min_start": 15.0,
-                "max_walk_min_end": 15.0,
-                "max_candidate_stations": 25,
-                "allow_walk_only": True,
-            },
-        }
-        json_data = json.dumps(summary, indent=2)
-        st.download_button(
-            label="📥 Scarica JSON (sintesi)",
-            data=json_data,
-            file_name="metro_accessibility_summary.json",
-            mime="application/json",
-        )
+        with col2:
+            summary = {
+                "gini_index": float(gini_value) if pd.notna(gini_value) else None,
+                "mean_time_min": float(metrics.get("mean_time_min", np.nan)),
+                "min_time_min": float(metrics.get("min_time_min", np.nan)),
+                "max_time_min": float(metrics.get("max_time_min", np.nan)),
+                "n_successful": int(metrics.get("n_ok", 0)),
+                "n_total": int(metrics.get("n_total", 0)),
+                "target_lon": float(target[0]),
+                "target_lat": float(target[1]),
+                "n_starts": int(len(starts)),
+                "routing": {
+                    "max_line_changes": max_line_changes,
+                    "change_penalty_min": change_penalty_min,
+                    "max_walk_min_start": 15.0,
+                    "max_walk_min_end": 15.0,
+                    "max_candidate_stations": 25,
+                    "allow_walk_only": True,
+                },
+            }
+            json_data = json.dumps(summary, indent=2)
+            st.download_button(
+                label="📥 Scarica JSON (sintesi)",
+                data=json_data,
+                file_name="metro_accessibility_summary.json",
+                mime="application/json",
+            )
 
 # ============================================================
 # FOOTER
@@ -648,7 +750,6 @@ st.markdown(
     """
 ---
 **pariGINI** | Basato su routing Dijkstra con cambi linea ottimizzati  
-📊 Misura di disuguaglianza: Gini Index + Theil Index  
 📍 Dati: RATP Metro Network (timed_edgelist.geojson)  
 🧭 Autocomplete: Géoplateforme (IGN) - completion
 """

@@ -432,20 +432,38 @@ def route_time_minutes(
 # INEQUALITY METRICS
 # =========================
 
-def gini_coefficient(values):
-    """Gini per array di valori non-negativi. Ritorna NaN se input vuoto."""
+def gini_coefficient(values, normalize=True):
+    """Gini per array di valori non-negativi.
+    Se normalize=True, normalizza dividendo per il massimo possibile (n-1)/n.
+    Ritorna NaN se input vuoto / somma <= 0 / n < 2 (in normalizzato).
+    """
     x = np.asarray(values, dtype=float)
     x = x[np.isfinite(x)]
     if x.size == 0:
         return np.nan
+
     x = np.clip(x, 0, None)
     s = x.sum()
     if s <= 0:
         return np.nan
+
     x_sorted = np.sort(x)
     n = x_sorted.size
     i = np.arange(1, n + 1, dtype=float)
-    return float((2.0 * np.sum(i * x_sorted) / (n * s)) - (n + 1) / n)
+
+    g = float((2.0 * np.sum(i * x_sorted) / (n * s)) - (n + 1) / n)
+
+    if not normalize:
+        return g
+
+    if n < 2:
+        return np.nan  # massimo non definito per n=0/1
+
+    g_max = (n - 1) / n
+    g_norm = g / g_max  # equivalente: g * n / (n - 1)
+
+    # opzionale: clamp per stabilità numerica
+    return float(np.clip(g_norm, 0.0, 1.0))
 
 
 def theil_index(values):
@@ -558,7 +576,7 @@ def accessibility_inequality_to_target(
         "p90_time_min": float(np.percentile(valid_times, 90)) if valid_times.size else np.nan,
         "min_time_min": float(np.min(valid_times)) if valid_times.size else np.nan,
         "max_time_min": float(np.max(valid_times)) if valid_times.size else np.nan,
-        "gini_time": gini_coefficient(valid_times),
+        "gini_time": gini_coefficient(valid_times, normalize=True),
         "theil_time": theil_index(valid_times),
     }
 
