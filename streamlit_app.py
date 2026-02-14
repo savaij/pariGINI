@@ -250,19 +250,26 @@ st.markdown("<div style='height:6px'></div>", unsafe_allow_html=True)
 # DECORAZIONI (SINISTRA, PICCOLE, COLORATE, ALMENO 2 LINEE DIVERSE)
 # ============================================================
 def render_left_decor():
-    keys = list(LINE_COLORS.keys())
-    chosen = random.sample(keys, k=2)
-    if random.random() < 0.45:
-        chosen.append(random.choice([k for k in keys if k not in chosen]))
+    # Genera i colori una sola volta al caricamento della pagina
+    if "decor_colors" not in st.session_state:
+        keys = list(LINE_COLORS.keys())
+        chosen = random.sample(keys, k=2)
+        if random.random() < 0.45:
+            chosen.append(random.choice([k for k in keys if k not in chosen]))
 
+        sizes = ["small", "med", "small", "long", "small", "med"]
+        colors = []
+        for i in range(len(sizes)):
+            if i % 3 == 0:
+                colors.append(WALK_COLOR)
+            else:
+                colors.append(LINE_COLORS[chosen[i % len(chosen)]])
+        
+        st.session_state.decor_colors = colors
+    
+    colors = st.session_state.decor_colors
     sizes = ["small", "med", "small", "long", "small", "med"]
-    colors = []
-    for i in range(len(sizes)):
-        if i % 3 == 0:
-            colors.append(WALK_COLOR)
-        else:
-            colors.append(LINE_COLORS[chosen[i % len(chosen)]])
-
+    
     pills = "\n".join(
         [f"<div class='pill {sizes[i]}' style='background:{colors[i]}'></div>" for i in range(len(sizes))]
     )
