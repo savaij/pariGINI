@@ -461,10 +461,11 @@ def route_time_minutes(
 
 import numpy as np
 
-def gini_coefficient(values, normalize=True, square_x=False):
+def gini_coefficient(values, normalize=True, square_x=False, balance_time=True):
     """Gini per array di valori non-negativi.
     Se normalize=True, normalizza dividendo per il massimo possibile (n-1)/n.
     Se square_x=True, usa x^2 (dopo clip a 0 e prima del calcolo).
+    Se balance_time=True, bilancia Gini normalizzato con il tempo di percorrenza medio
     Ritorna NaN se input vuoto / somma <= 0 / n < 2 (in normalizzato).
     """
     x = np.asarray(values, dtype=float)
@@ -473,6 +474,10 @@ def gini_coefficient(values, normalize=True, square_x=False):
         return np.nan
 
     x = np.clip(x, 0, None)
+
+    if balance_time:
+        mean = x.mean()
+
 
     if square_x:
         x = x**2
@@ -496,8 +501,12 @@ def gini_coefficient(values, normalize=True, square_x=False):
     g_max = (n - 1) / n
     g_norm = g / g_max
 
-    return float(np.clip(g_norm, 0.0, 1.0))
+    g_norm = float(np.clip(g_norm, 0.0, 1.0))
 
+    if balance_time and mean > 0:
+        return g_norm * mean
+
+    return g_norm
 
 def theil_index(values):
     """Theil T (indice entropico). Ritorna NaN se mean<=0 o input vuoto."""
@@ -627,7 +636,7 @@ def accessibility_inequality_to_target(
         "p90_time_min": float(np.percentile(valid_times, 90)) if valid_times.size else np.nan,
         "min_time_min": float(np.min(valid_times)) if valid_times.size else np.nan,
         "max_time_min": float(np.max(valid_times)) if valid_times.size else np.nan,
-        "gini_time": gini_coefficient(valid_times, normalize=True, square_x=True),
+        "gini_time": gini_coefficient(valid_times, normalize=True, square_x=True, balance_time=True),
         "theil_time": theil_index(valid_times),
     }
 

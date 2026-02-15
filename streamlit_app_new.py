@@ -664,11 +664,11 @@ def render_hexagon_heatmap(hexes_gdf, metrics_df):
     Visualizza una mappa Plotly con esagoni colorati in base al Gini Index.
     
     - hexes_gdf: GeoDataFrame con esagoni (deve avere colonna 'id')
-    - metrics_df: DataFrame con colonne 'target_id' e 'gini_time'
+    - metrics_df: DataFrame con colonne 'target_id', 'gini_time', e 'mean_time_min'
     """
     # Join dei dati: hexes_gdf.id = metrics_df.target_id
     hex_merged = hexes_gdf.merge(
-        metrics_df[["target_id", "gini_time"]],
+        metrics_df[["target_id", "gini_time", "mean_time_min"]],
         left_on="id",
         right_on="target_id",
         how="left"
@@ -687,6 +687,7 @@ def render_hexagon_heatmap(hexes_gdf, metrics_df):
     for _, row in hex_merged_wgs84.iterrows():
         poly = row.geometry
         gini_val = row.get("gini_time")
+        mean_time = row.get("mean_time_min")
         
         # Estrai coordinate esterno del poligono
         xs, ys = poly.exterior.xy
@@ -698,10 +699,23 @@ def render_hexagon_heatmap(hexes_gdf, metrics_df):
         else:
             color = "#CCCCCC"  # grigio per valori mancanti
             gini_text = "N/A"
-        
+
+        # converti hex -> rgba per avere un fill semi-trasparente
+        def _hex_to_rgba(h, a):
+            h = str(h).lstrip("#")
+            if len(h) != 6:
+                return f"rgba(200,200,200,{a})"
+            r = int(h[0:2], 16)
+            g = int(h[2:4], 16)
+            b = int(h[4:6], 16)
+            return f"rgba({r},{g},{b},{a})"
+
+        fill_alpha = 0.35  # -> regola qui l'opacità del riempimento (0.0..1.0)
+        fillcol = _hex_to_rgba(color, fill_alpha)
+
         # Hover text
-        hover_text = f"<b>Zona {int(row.get('id', '?'))}</b><br>Gini: {gini_text}"
-        
+        hover_text = f"<b>Zona {int(row.get('id', '?'))}</b><br>Gini: {gini_text} <br>Tempo medio: {fmt_min(mean_time)} min"
+
         fig.add_trace(go.Scattermapbox(
             lon=list(xs),
             lat=list(ys),
@@ -709,8 +723,8 @@ def render_hexagon_heatmap(hexes_gdf, metrics_df):
             name=gini_text,
             line=dict(color=color, width=2),
             fill="toself",
-            fillcolor=color,
-            opacity=0.7,
+            fillcolor=fillcol,
+            opacity=1.0,
             hovertext=hover_text,
             hoverinfo="text",
             showlegend=False,
@@ -945,9 +959,20 @@ if st.button(
             st.error(f"Errore nel calcolo: {e}")
             st.stop()
 
+    gini_raw = metrics_df["gini_time"].where(pd.notna(metrics_df["gini_time"]), np.nan)
+    gini_min = np.nanmin(gini_raw.to_numpy()) if len(gini_raw) else np.nan
+    gini_max = np.nanmax(gini_raw.to_numpy()) if len(gini_raw) else np.nan
+    if np.isfinite(gini_min) and np.isfinite(gini_max) and gini_max > gini_min:
+        metrics_df["gini_time_norm"] = (gini_raw - gini_min) / (gini_max - gini_min)
+    else:
+        metrics_df["gini_time_norm"] = np.nan
+
     # Visualizza la heatmap degli esagoni colorati per Gini
     st.subheader("Mappa di equità - Gini Index per zona")
-    fig = render_hexagon_heatmap(hexes_gdf, metrics_df)
+    heatmap_df = metrics_df[["target_id", "gini_time_norm", "mean_time_min"]].rename(
+        columns={"gini_time_norm": "gini_time"}
+    )
+    fig = render_hexagon_heatmap(hexes_gdf, heatmap_df)
     st.plotly_chart(fig, use_container_width=True)
 
     # Spiegazione Gini
@@ -966,7 +991,7 @@ La mappa mostra il Gini Index da ogni punto della città verso tutti i vostri am
 
     # Statistiche globali
     st.subheader("Statistiche della zona - Gini Index")
-    gini_values = metrics_df["gini_time"].dropna()
+    gini_values = metrics_df["gini_time_norm"].dropna()
     if len(gini_values) > 0:
         c1, c2, c3, c4 = st.columns(4)
         with c1:
