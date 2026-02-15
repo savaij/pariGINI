@@ -45,7 +45,7 @@ def fmt_min(x) -> str:
 # PAGE CONFIG (UNA SOLA VOLTA, SUBITO)
 # ============================================================
 st.set_page_config(
-    page_title="pariGINI",
+    page_title="pariGINI • Esagoni",
     layout="wide",
     initial_sidebar_state="collapsed",
 )
