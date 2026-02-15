@@ -18,6 +18,7 @@ from gini_paris_distances_calculations import (
     build_graph_from_edgelist,
     build_node_index,
     accessibility_inequality_to_target,
+    accessibility_inequality_to_targets
 )
 
 # ============================================================
@@ -820,47 +821,100 @@ for i in range(st.session_state.n_friends):
             starts.append(coords)
 
 # ============================================================
-# INPUT: TARGET
+# STATE: numero target (min 1)
+# ============================================================
+if "n_targets" not in st.session_state:
+    st.session_state.n_targets = 1
+
+def add_target():
+    st.session_state.n_targets += 1
+
+def remove_target():
+    if st.session_state.n_targets > 1:
+        st.session_state.n_targets -= 1
+
+
+# ============================================================
+# INPUT: TARGETS (DESTINAZIONI)
 # ============================================================
 st.header("Dove andate?")
 
-_, target_coords = address_autocomplete(
-    label="",
-    key="target",
-    placeholder="Es: Tour Eiffel • Louvre • Châtelet • 20 Avenue de ... 750xx Paris",
-)
-target = target_coords
+trow = st.columns([1, 1, 8])
+with trow[0]:
+    st.button("Aggiungi", use_container_width=True, on_click=add_target, key="btn_add_target")
+with trow[1]:
+    st.button(
+        "Rimuovi",
+        use_container_width=True,
+        disabled=(st.session_state.n_targets <= 1),
+        on_click=remove_target,
+        key="btn_remove_target",
+    )
+with trow[2]:
+    st.caption("Puoi inserire 1 o più destinazioni. Seleziona un suggerimento per ciascuna.")
+
+targets = []
+target_addresses = []
+for j in range(st.session_state.n_targets):
+    row = st.columns([1, 7])
+    with row[0]:
+        st.markdown(f"**Target {j+1}**")
+    with row[1]:
+        selected_address, tcoords = address_autocomplete(
+            label="",
+            key=f"target_{j}",
+            placeholder="Es: Tour Eiffel • Louvre • Châtelet • 20 Avenue de ... 750xx Paris",
+        )
+        if tcoords:
+            targets.append(tcoords)
+            target_addresses.append(selected_address if selected_address else f"Target {j+1}")
 
 # ============================================================
-# VALIDAZIONE (min 2 amici + target)
+# VALIDAZIONE (min 2 amici + almeno 1 target selezionato)
 # ============================================================
-ready = (target is not None) and (len(starts) >= 2)
+ready = (len(starts) >= 2) and (len(targets) >= 1)
 
 if not ready:
     problems = []
     if len(starts) < 2:
         problems.append("almeno 2 amici (con indirizzo selezionato)")
-    if target is None:
-        problems.append("destinazione (seleziona un suggerimento)")
+    if len(targets) < 1:
+        problems.append("almeno 1 destinazione (seleziona un suggerimento)")
     st.warning("Manca: " + ", ".join(problems) + ".")
+
 
 # ============================================================
 # ANALYSIS & RESULTS
 # ============================================================
-if st.button(
-    "Calcola Gini",
+
+# Firma per capire se è cambiato l'input (amici + targets selezionati)
+# (se vuoi più robusto includi anche max_line_changes ecc.)
+signature = (tuple(starts), tuple(targets), tuple(target_addresses))
+
+prev_sig = st.session_state.get("targets_metrics_signature", None)
+
+if prev_sig != signature:
+    st.session_state["targets_metrics_df"] = None
+    st.session_state["targets_metrics_signature"] = signature
+    st.session_state["picked_target_id"] = None
+    st.session_state["target_addresses"] = target_addresses
+
+clicked = st.button(
+    "CONFRONTA DESTINAZIONI",
     type="primary",
     use_container_width=True,
     disabled=not ready,
-):
-    st.divider()
+)
 
-    with st.spinner("Calcolo tempi di percorrenza..."):
+# Se cliccato, calcola e salva
+if clicked:
+    st.divider()
+    with st.spinner("Calcolo indicatori per tutte le destinazioni..."):
         try:
-            results_df, metrics = accessibility_inequality_to_target(
+            metrics_df = accessibility_inequality_to_targets(
                 G,
-                starts,
-                target,
+                starts_lonlat=starts,
+                targets_lonlat=targets,
                 node_index=node_index,
                 max_line_changes=max_line_changes,
                 change_penalty_min=change_penalty_min,
@@ -868,96 +922,231 @@ if st.button(
                 max_walk_min_end=15.0,
                 max_candidate_stations=25,
                 allow_walk_only=True,
-                keep_details=True,
+                keep_details=False,
+                return_per_target_df=False,
             )
         except Exception as e:
-            st.error(f"Errore nel calcolo: {e}")
+            st.error(f"Errore nel calcolo multi-target: {e}")
             st.stop()
 
-    # 1) Gini
-    gini_value = float(metrics.get("gini_time", np.nan))
-    render_gini_bar(gini_value)
+    # --- aggancia label target (indirizzi selezionati) ---
+    label_by_id = {i: target_addresses[i] for i in range(len(targets))}
+    metrics_df["target_label"] = metrics_df["target_id"].map(label_by_id)
 
-    # 2) Barre percorso (tempi arrotondati nelle etichette)
-    render_routes_html(results_df)
+    # --- ordine colonne (solo il necessario) ---
+    cols_front = ["target_label", "gini_time", "mean_time_min", "min_time_min", "max_time_min", "n_ok", "n_total"]
+    cols_existing = [c for c in cols_front if c in metrics_df.columns]
+    other_cols = [c for c in metrics_df.columns if c not in cols_existing]
+    metrics_df = metrics_df[cols_existing + other_cols]
 
-    # 3) Spiegazione Gini (testo senza emoticon)
-    if np.isfinite(gini_value):
-        verdict = "abbastanza equo" if gini_value <= 0.5 else "poco equo"
-        st.info(
+    # --- ordina per equità ---
+    if "gini_time" in metrics_df.columns:
+        metrics_df = metrics_df.sort_values("gini_time", ascending=True).reset_index(drop=True)
+
+    # salva in sessione
+    st.session_state.targets_metrics_df = metrics_df
+
+    # set default picked target (il migliore)
+    if len(metrics_df):
+        st.session_state.picked_target_id = int(metrics_df.iloc[0]["target_id"])
+
+# Se ho risultati salvati, li mostro (anche dopo rerun!)
+metrics_df = st.session_state.get("targets_metrics_df", None)
+if metrics_df is not None and len(metrics_df) > 0:
+    st.divider()
+
+    # ============================================================
+    # OUTPUT VISIVO: confronto
+    # ============================================================
+    st.subheader("Classifica destinazioni (più equa → meno equa)")
+
+    # --- TOP INFO: mostra subito il target col Gini minimo ---
+    if "gini_time" in metrics_df.columns and metrics_df["gini_time"].notna().any():
+        best_row = metrics_df.loc[metrics_df["gini_time"].idxmin()]
+        best_label = str(best_row["target_label"])
+        best_gini = float(best_row["gini_time"])
+
+        st.markdown(
             f"""
-**Cosa significa il Gini Index?**
-
-- Gini = 0: tutti i tempi di percorrenza sono uguali  
-- Gini = 1: massima disuguaglianza possibile  
-- Gini alto: tempi molto diversi
-- Gini basso: tempi simili
-
-In questo caso: Gini = {gini_value:.4f} → {verdict}.
-"""
+            <div style="
+                padding: 18px 18px;
+                border-radius: 16px;
+                border: 1px solid rgba(17,24,39,0.18);
+                background: #f3f4f6;
+                margin: 10px 0 14px 0;
+            ">
+            <div style="
+                font-size: 26px;
+                font-weight: 600;
+                line-height: 1.15;
+                color: rgba(17,24,39,0.95);
+            ">
+                La destinazione più equa è:
+                <span style="
+                    font-size: 34px;
+                    font-weight: 950;
+                    padding: 2px 10px;
+                    border-radius: 12px;
+                    background: #ffffff;
+                    border: 1px solid rgba(17,24,39,0.18);
+                    display: inline-block;
+                    margin-left: 8px;
+                ">
+                {best_label}
+                </span>
+            </div>
+            <div style="
+                margin-top: 8px;
+                font-size: 18px;
+                font-weight: 800;
+                color: rgba(17,24,39,0.78);
+            ">
+                Gini: <span style="color: rgba(17,24,39,0.95);">{best_gini:.4f}</span>
+            </div>
+            </div>
+            """,
+            unsafe_allow_html=True,
         )
     else:
-        st.info(
+        st.markdown(
             """
-**Cosa significa il Gini Index?**
-
-- Gini = 0: tutti i tempi di percorrenza sono uguali  
-- Gini = 1: massima disuguaglianza possibile  
-- Gini alto: tempi molto diversi
-- Gini basso: tempi simili
-"""
+            <div style="
+                padding: 18px 18px;
+                border-radius: 16px;
+                border: 1px solid rgba(17,24,39,0.18);
+                background: #fef3c7;
+                margin: 10px 0 14px 0;
+                font-size: 22px;
+                font-weight: 900;
+                color: rgba(17,24,39,0.95);
+            ">
+            Non è disponibile il Gini per determinare la destinazione migliore.
+            </div>
+            """,
+            unsafe_allow_html=True,
         )
 
-    # 4) Statistiche: SOLO min / medio / max (arrotondate)
-    st.subheader("Statistiche tempi di percorrenza")
-    c1, c2, c3 = st.columns(3)
-    with c1:
-        st.metric("Minimo", f"{fmt_min(metrics.get('min_time_min', np.nan))} min")
-    with c2:
-        st.metric("Medio", f"{fmt_min(metrics.get('mean_time_min', np.nan))} min")
-    with c3:
-        st.metric("Massimo", f"{fmt_min(metrics.get('max_time_min', np.nan))} min")
+    # Tabella compatta
+    if "gini_time" in metrics_df.columns:
+        metrics_df_display = metrics_df.copy()[["target_label", "gini_time", "mean_time_min"]]
+        metrics_df_display = metrics_df_display.rename(columns={
+            "target_label": "Destinazione",
+            "gini_time": "Gini",
+            "mean_time_min": "Tempo Medio (min)",
+        })
+    else:
+        metrics_df_display = metrics_df.copy()
+        metrics_df_display = metrics_df_display.rename(columns={"target_label": "Destinazione"})
 
-    # 5) Export
-    with st.expander("Esporta risultati", expanded=False):
-        col1, col2 = st.columns(2)
+    st.dataframe(metrics_df_display, use_container_width=True, hide_index=True)
 
-        with col1:
-            csv = results_df.to_csv(index=False)
-            st.download_button(
-                label="Scarica CSV (dettagli)",
-                data=csv,
-                file_name="metro_accessibility_results.csv",
-                mime="text/csv",
-            )
+    # ============================================================
+    # DRILL-DOWN (persistente)
+    # ============================================================
+    st.subheader("Dettaglio di una destinazione")
 
-        with col2:
-            summary = {
-                "gini_index": float(gini_value) if pd.notna(gini_value) else None,
-                "mean_time_min": float(metrics.get("mean_time_min", np.nan)),
-                "min_time_min": float(metrics.get("min_time_min", np.nan)),
-                "max_time_min": float(metrics.get("max_time_min", np.nan)),
-                "n_successful": int(metrics.get("n_ok", 0)),
-                "n_total": int(metrics.get("n_total", 0)),
-                "target_lon": float(target[0]),
-                "target_lat": float(target[1]),
-                "n_starts": int(len(starts)),
-                "routing": {
-                    "max_line_changes": max_line_changes,
-                    "change_penalty_min": change_penalty_min,
-                    "max_walk_min_start": 15.0,
-                    "max_walk_min_end": 15.0,
-                    "max_candidate_stations": 25,
-                    "allow_walk_only": True,
-                },
-            }
-            json_data = json.dumps(summary, indent=2)
-            st.download_button(
-                label="Scarica JSON (sintesi)",
-                data=json_data,
-                file_name="metro_accessibility_summary.json",
-                mime="application/json",
-            )
+    # Recupera gli indirizzi salvati
+    saved_addresses = st.session_state.get("target_addresses", [])
+    
+    options = list(metrics_df["target_id"].astype(int))
+    cur = st.session_state.get("picked_target_id", None)
+    if cur not in options:
+        cur = options[0]
+        st.session_state.picked_target_id = int(cur)
+    cur_index = options.index(int(cur))
+
+    # Label-friendly selectbox, ma salva l'id
+    picked_target_id = st.selectbox(
+        "Seleziona una destinazione",
+        options=options,
+        index=cur_index,
+        format_func=lambda tid: saved_addresses[int(tid)] if int(tid) < len(saved_addresses) else f"Target {int(tid)+1}",
+        key="picked_target_selectbox",
+    )
+
+    if int(picked_target_id) != int(st.session_state.picked_target_id):
+        st.session_state.picked_target_id = int(picked_target_id)
+
+    # Recupera coords del target scelto
+    tid = int(st.session_state.picked_target_id)
+    if tid < 0 or tid >= len(targets):
+        st.warning("Indice destinazione fuori range.")
+    else:
+        picked_coords = targets[tid]
+        picked_address = saved_addresses[tid] if tid < len(saved_addresses) else f"Target {tid+1}"
+
+        with st.spinner(f"Calcolo dettagli percorso verso {picked_address} ..."):
+            try:
+                results_df, metrics = accessibility_inequality_to_target(
+                    G,
+                    starts,
+                    picked_coords,
+                    node_index=node_index,
+                    max_line_changes=max_line_changes,
+                    change_penalty_min=change_penalty_min,
+                    max_walk_min_start=15.0,
+                    max_walk_min_end=15.0,
+                    max_candidate_stations=25,
+                    allow_walk_only=True,
+                    keep_details=True,
+                )
+            except Exception as e:
+                st.error(f"Errore nel calcolo dettagli: {e}")
+                st.stop()
+
+        st.caption(f"Destinazione: **{picked_address}**")
+
+        gini_value = metrics.get("gini_time", None)
+        render_gini_bar(gini_value)
+        render_routes_html(results_df)
+
+        st.subheader("Statistiche tempi di percorrenza")
+        c1, c2, c3 = st.columns(3)
+        with c1:
+            st.metric("Minimo", f"{fmt_min(metrics.get('min_time_min', np.nan))} min")
+        with c2:
+            st.metric("Medio", f"{fmt_min(metrics.get('mean_time_min', np.nan))} min")
+        with c3:
+            st.metric("Massimo", f"{fmt_min(metrics.get('max_time_min', np.nan))} min")
+
+        with st.expander("Esporta risultati", expanded=False):
+            col1, col2 = st.columns(2)
+            with col1:
+                csv_all = metrics_df.to_csv(index=False)
+                st.download_button(
+                    label="Scarica CSV (confronto destinazioni)",
+                    data=csv_all,
+                    file_name="targets_comparison_metrics.csv",
+                    mime="text/csv",
+                )
+
+            with col2:
+                summary = {
+                    "picked_target_id": tid,
+                    "picked_target_label": picked_address,
+                    "picked_target_lon": float(picked_coords[0]),
+                    "picked_target_lat": float(picked_coords[1]),
+                    "picked_target_metrics": {
+                        k: (float(v) if isinstance(v, (int, float, np.floating)) and np.isfinite(v) else v)
+                        for k, v in metrics.items()
+                    },
+                    "routing": {
+                        "max_line_changes": max_line_changes,
+                        "change_penalty_min": change_penalty_min,
+                        "max_walk_min_start": 15.0,
+                        "max_walk_min_end": 15.0,
+                        "max_candidate_stations": 25,
+                        "allow_walk_only": True,
+                    },
+                }
+                json_data = json.dumps(summary, indent=2)
+                st.download_button(
+                    label="Scarica JSON (dettaglio destinazione selezionata)",
+                    data=json_data,
+                    file_name="picked_target_detail.json",
+                    mime="application/json",
+                )
+
 
 # ============================================================
 # FOOTER
