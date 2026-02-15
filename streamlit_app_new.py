@@ -960,10 +960,9 @@ if st.button(
             st.stop()
 
     gini_raw = metrics_df["gini_time"].where(pd.notna(metrics_df["gini_time"]), np.nan)
-    gini_min = np.nanmin(gini_raw.to_numpy()) if len(gini_raw) else np.nan
     gini_max = np.nanmax(gini_raw.to_numpy()) if len(gini_raw) else np.nan
-    if np.isfinite(gini_min) and np.isfinite(gini_max) and gini_max > gini_min:
-        metrics_df["gini_time_norm"] = (gini_raw - gini_min) / (gini_max - gini_min)
+    if np.isfinite(gini_max) and gini_max > 0:
+        metrics_df["gini_time_norm"] = gini_raw / gini_max
     else:
         metrics_df["gini_time_norm"] = np.nan
 
