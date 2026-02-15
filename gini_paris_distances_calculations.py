@@ -634,6 +634,83 @@ def accessibility_inequality_to_target(
     return results_df, metrics
 
 
+
+# =========================
+# BATCH: MANY STARTS -> MANY TARGETS (ITERATE GINI OVER TARGETS)
+# =========================
+
+def accessibility_inequality_to_targets(
+    G,
+    starts_lonlat,
+    targets_lonlat,
+    node_index=None,
+    walk_speed_m_per_min=None,
+    max_line_changes=None,
+    change_penalty_min=None,
+    max_walk_min_start=15.0,
+    max_walk_min_end=15.0,
+    max_candidate_stations=25,
+    allow_walk_only=True,
+    keep_details=False,
+    return_per_target_df=True,
+):
+    """
+    Calcola l'inequality (incl. Gini) da molti start verso molti target.
+
+    Parametri:
+    - starts_lonlat: iterable di (lon, lat)
+    - targets_lonlat: iterable di (lon, lat)
+    - return_per_target_df:
+        - True  -> ritorna anche un dict {target_id: results_df}
+        - False -> ritorna solo il dataframe delle metriche
+
+    Ritorna:
+    - metrics_df: DataFrame con una riga per target (include gini_time, theil_time, ecc.)
+    - per_target_results (opzionale): dict con i results_df per ogni target
+    """
+    if node_index is None:
+        node_index = build_node_index(G)
+
+    per_target_results = {}   # target_id -> results_df
+    metrics_rows = []
+
+    for t_idx, target in enumerate(targets_lonlat):
+        # riusa esattamente la funzione esistente
+        df, metrics = accessibility_inequality_to_target(
+            G,
+            starts_lonlat=starts_lonlat,
+            target_lonlat=target,
+            node_index=node_index,
+            walk_speed_m_per_min=walk_speed_m_per_min,
+            max_line_changes=max_line_changes,
+            change_penalty_min=change_penalty_min,
+            max_walk_min_start=max_walk_min_start,
+            max_walk_min_end=max_walk_min_end,
+            max_candidate_stations=max_candidate_stations,
+            allow_walk_only=allow_walk_only,
+            keep_details=keep_details,
+        )
+
+        # aggiungi identificativi/coordinate target alla riga metriche
+        row = dict(metrics)
+        row.update({
+            "target_id": int(t_idx),
+            "target_lon": float(target[0]),
+            "target_lat": float(target[1]),
+        })
+        metrics_rows.append(row)
+
+        if return_per_target_df:
+            per_target_results[int(t_idx)] = df
+
+    metrics_df = pd.DataFrame(metrics_rows).sort_values("target_id").reset_index(drop=True)
+
+    if return_per_target_df:
+        return metrics_df, per_target_results
+
+    return metrics_df
+
+
 # =========================
 # EXAMPLE USAGE
 # =========================
