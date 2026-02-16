@@ -539,6 +539,7 @@ def accessibility_inequality_to_target(
     max_candidate_stations=25,
     allow_walk_only=True,
     keep_details=False,
+    balance_time_gini=True
 ):
     """
     Calcola tempi di percorrenza da molti start verso un target.
@@ -636,7 +637,7 @@ def accessibility_inequality_to_target(
         "p90_time_min": float(np.percentile(valid_times, 90)) if valid_times.size else np.nan,
         "min_time_min": float(np.min(valid_times)) if valid_times.size else np.nan,
         "max_time_min": float(np.max(valid_times)) if valid_times.size else np.nan,
-        "gini_time": gini_coefficient(valid_times, normalize=True, square_x=True, balance_time=True),
+        "gini_time": gini_coefficient(valid_times, normalize=True, square_x=True, balance_time=balance_time_gini),
         "theil_time": theil_index(valid_times),
     }
 
@@ -662,6 +663,7 @@ def accessibility_inequality_to_targets(
     allow_walk_only=True,
     keep_details=False,
     return_per_target_df=True,
+    balance_time_gini=True
 ):
     """
     Calcola l'inequality (incl. Gini) da molti start verso molti target.
@@ -698,6 +700,7 @@ def accessibility_inequality_to_targets(
             max_candidate_stations=max_candidate_stations,
             allow_walk_only=allow_walk_only,
             keep_details=keep_details,
+            balance_time_gini=balance_time_gini,
         )
 
         # aggiungi identificativi/coordinate target alla riga metriche

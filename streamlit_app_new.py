@@ -644,12 +644,16 @@ def render_routes_html(results_df):
 # ============================================================
 def gini_to_color_hex(v):
     v = float(np.clip(v, 0.0, 1.0))
+    blue = np.array([59, 130, 246])   # #3b82f6
     green = np.array([34, 197, 94])   # #22c55e
     amber = np.array([245, 158, 11])  # #f59e0b
     red = np.array([239, 68, 68])     # #ef4444
 
-    if v <= 0.55:
-        t = v / 0.55 if 0.55 else 0
+    if v <= 0.1:
+        t = v / 0.1 if 0.1 else 0
+        rgb = blue + (green - blue) * t
+    elif v <= 0.55:
+        t = (v - 0.1) / (0.55 - 0.1)
         rgb = green + (amber - green) * t
     else:
         t = (v - 0.55) / (1 - 0.55)
@@ -659,13 +663,15 @@ def gini_to_color_hex(v):
     return "#{:02x}{:02x}{:02x}".format(rgb[0], rgb[1], rgb[2])
 
 
-def render_hexagon_heatmap(hexes_gdf, metrics_df):
+def render_hexagon_heatmap(hexes_gdf, metrics_df, labels_map=None):
     """
     Visualizza una mappa Plotly con esagoni colorati in base al Gini Index.
     
     - hexes_gdf: GeoDataFrame con esagoni (deve avere colonna 'id')
     - metrics_df: DataFrame con colonne 'target_id', 'gini_time', e 'mean_time_min'
     """
+    labels_map = labels_map or {}
+
     # Join dei dati: hexes_gdf.id = metrics_df.target_id
     hex_merged = hexes_gdf.merge(
         metrics_df[["target_id", "gini_time", "mean_time_min"]],
@@ -714,7 +720,17 @@ def render_hexagon_heatmap(hexes_gdf, metrics_df):
         fillcol = _hex_to_rgba(color, fill_alpha)
 
         # Hover text
-        hover_text = f"<b>Zona {int(row.get('id', '?'))}</b><br>Gini: {gini_text} <br>Tempo medio: {fmt_min(mean_time)} min"
+        zone_id = row.get("id")
+        try:
+            zone_key = str(int(zone_id))
+        except Exception:
+            zone_key = str(zone_id) if zone_id is not None else None
+
+        label = labels_map.get(zone_key) if zone_key is not None else None
+        if not label:
+            label = f"Zona {zone_key}" if zone_key is not None else "Zona ?"
+
+        hover_text = f"<b>{label}</b><br>Gini: {gini_text} <br>Tempo medio: {fmt_min(mean_time)} min"
 
         fig.add_trace(go.Scattermapbox(
             lon=list(xs),
@@ -855,10 +871,18 @@ def load_hexagon_data():
     return centers_gdf, hexes_gdf
 
 
+@st.cache_data(show_spinner=False)
+def load_center_labels():
+    with open("./id_to_labels_centers.json", "r", encoding="utf-8") as f:
+        data = json.load(f)
+    return data if isinstance(data, dict) else {}
+
+
 with st.spinner("Caricamento rete metro e griglia esagonale..."):
     try:
         G, node_index = load_graph()
         centers_gdf, hexes_gdf = load_hexagon_data()
+        center_labels = load_center_labels()
     except Exception as e:
         st.error(f"Errore nel caricamento: {e}")
         st.stop()
@@ -954,24 +978,33 @@ if st.button(
                 allow_walk_only=True,
                 keep_details=True,
                 return_per_target_df=True,
+                balance_time_gini=True
             )
         except Exception as e:
             st.error(f"Errore nel calcolo: {e}")
             st.stop()
 
-    gini_raw = metrics_df["gini_time"].where(pd.notna(metrics_df["gini_time"]), np.nan)
-    gini_max = np.nanmax(gini_raw.to_numpy()) if len(gini_raw) else np.nan
-    if np.isfinite(gini_max) and gini_max > 0:
-        metrics_df["gini_time_norm"] = gini_raw / gini_max
+    # --- normalizza rispetto alla media delle medie dei tempi (come versione "bar") --- NO CLIPPING
+    if "mean_time_min" in metrics_df.columns and metrics_df["mean_time_min"].notna().any():
+        mean_of_means = float(metrics_df["mean_time_min"].mean(skipna=True))
+        if np.isfinite(mean_of_means) and mean_of_means > 0:
+            if "gini_time" in metrics_df.columns:
+                gini_raw = pd.to_numeric(metrics_df["gini_time"], errors="coerce")
+                metrics_df["gini_time_norm"] = gini_raw / mean_of_means
+            else:
+                metrics_df["gini_time_norm"] = np.nan
+        else:
+            metrics_df["gini_time_norm"] = np.nan
     else:
         metrics_df["gini_time_norm"] = np.nan
+
 
     # Visualizza la heatmap degli esagoni colorati per Gini
     st.subheader("Mappa di equità - Gini Index per zona")
     heatmap_df = metrics_df[["target_id", "gini_time_norm", "mean_time_min"]].rename(
         columns={"gini_time_norm": "gini_time"}
     )
-    fig = render_hexagon_heatmap(hexes_gdf, heatmap_df)
+    fig = render_hexagon_heatmap(hexes_gdf, heatmap_df, labels_map=center_labels)
     st.plotly_chart(fig, use_container_width=True)
 
     # Spiegazione Gini

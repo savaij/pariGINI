@@ -922,16 +922,27 @@ if clicked:
                 max_walk_min_end=15.0,
                 max_candidate_stations=25,
                 allow_walk_only=True,
-                keep_details=False,
-                return_per_target_df=False,
+                keep_details=True,
+                return_per_target_df=True,
+                balance_time_gini=True
             )
         except Exception as e:
             st.error(f"Errore nel calcolo multi-target: {e}")
             st.stop()
 
+        metrics_df, per_target_results = metrics_df
+
     # --- aggancia label target (indirizzi selezionati) ---
     label_by_id = {i: target_addresses[i] for i in range(len(targets))}
     metrics_df["target_label"] = metrics_df["target_id"].map(label_by_id)
+
+    # --- normalizza rispetto alla media delle medie dei tempi --- CLIPPING A 1
+    if "mean_time_min" in metrics_df.columns and metrics_df["mean_time_min"].notna().any():
+        mean_of_means = float(metrics_df["mean_time_min"].mean(skipna=True))
+        if np.isfinite(mean_of_means) and mean_of_means > 0:
+            if "gini_time" in metrics_df.columns:
+                metrics_df["gini_time"] = metrics_df["gini_time"] / mean_of_means
+                metrics_df["gini_time"] = metrics_df["gini_time"].clip(0.0, 1.0)
 
     # --- ordine colonne (solo il necessario) ---
     cols_front = ["target_label", "gini_time", "mean_time_min", "min_time_min", "max_time_min", "n_ok", "n_total"]
@@ -945,6 +956,7 @@ if clicked:
 
     # salva in sessione
     st.session_state.targets_metrics_df = metrics_df
+    st.session_state.targets_per_target_results = per_target_results
 
     # set default picked target (il migliore)
     if len(metrics_df):
@@ -1075,24 +1087,21 @@ if metrics_df is not None and len(metrics_df) > 0:
         picked_coords = targets[tid]
         picked_address = saved_addresses[tid] if tid < len(saved_addresses) else f"Target {tid+1}"
 
-        with st.spinner(f"Calcolo dettagli percorso verso {picked_address} ..."):
-            try:
-                results_df, metrics = accessibility_inequality_to_target(
-                    G,
-                    starts,
-                    picked_coords,
-                    node_index=node_index,
-                    max_line_changes=max_line_changes,
-                    change_penalty_min=change_penalty_min,
-                    max_walk_min_start=15.0,
-                    max_walk_min_end=15.0,
-                    max_candidate_stations=25,
-                    allow_walk_only=True,
-                    keep_details=True,
-                )
-            except Exception as e:
-                st.error(f"Errore nel calcolo dettagli: {e}")
-                st.stop()
+        # Recupera i risultati memorizzati (senza ricacolare)
+        per_target_results = st.session_state.get("targets_per_target_results") or {}
+        results_df = per_target_results.get(tid)
+        
+        # Recupera le metriche dal dataframe dei risultati aggregati
+        target_row = metrics_df.loc[metrics_df["target_id"] == tid]
+        if target_row.empty:
+            st.warning("Metriche della destinazione non trovate nei risultati del confronto.")
+            st.stop()
+        
+        metrics = target_row.iloc[0].to_dict()
+
+        if results_df is None:
+            st.warning("Dettagli percorso non disponibili per questa destinazione.")
+            st.stop()
 
         st.caption(f"Destinazione: **{picked_address}**")
 
