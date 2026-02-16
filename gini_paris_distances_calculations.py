@@ -504,7 +504,7 @@ def gini_coefficient(values, normalize=True, square_x=False, balance_time=True):
     g_norm = float(np.clip(g_norm, 0.0, 1.0))
 
     if balance_time and mean > 0:
-        return g_norm * mean / 30
+        return g_norm * mean
 
     return g_norm
 
