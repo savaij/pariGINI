@@ -1,33 +1,49 @@
 """
 Streamlit App: pariGINI
 Calcola e visualizza il Gini Index per la disuguaglianza di accessibilità in metro a Parigi
+
+Versione riscritta:
+- Colorazione esagoni: SOLO verde->rosso (niente blu)
+- Esagoni ricentrati sui centri + scala x2
+- Riempimento più opaco
+- Rendering mappa molto più veloce:
+    * usa Plotly Choroplethmapbox (1 trace) invece di migliaia di Scattermapbox
+    * geometrie semplificate e pre-cached (topology-preserving)
+- Ripulisce plot obsoleti (mean_time_softmax), usa gini_time(score) corretti
 """
 
 import json
 import math
 import random
 import requests
+
+import numpy as np
+import pandas as pd
+import geopandas as gpd
+
 import streamlit as st
 import streamlit.components.v1 as components
-import pandas as pd
-import numpy as np
-import geopandas as gpd
 import plotly.graph_objects as go
-
 from streamlit_searchbox import st_searchbox  # pip install streamlit-searchbox
 
+from shapely import affinity
+from shapely.geometry import Polygon, MultiPolygon, Point
+
 from gini_paris_distances_calculations import (
+    load_precomputed_data,
     build_graph_from_edgelist,
     build_node_index,
-    accessibility_inequality_to_target,
-    accessibility_inequality_to_targets
+    accessibility_inequality_to_targets,
 )
 
 # ============================================================
 # HELPERS
 # ============================================================
+WGS84_EPSG = 4326
+METRIC_EPSG = 2154
+
+
 def round_minutes(x) -> int:
-    """Arrotondamento classico (13.7 -> 14). Assume x >= 0."""
     try:
         v = float(x)
     except Exception:
@@ -41,8 +57,18 @@ def fmt_min(x) -> str:
     return str(round_minutes(x))
 
 
+def _hex_to_rgba(h, a):
+    h = str(h).lstrip("#")
+    if len(h) != 6:
+        return f"rgba(200,200,200,{a})"
+    r = int(h[0:2], 16)
+    g = int(h[2:4], 16)
+    b = int(h[4:6], 16)
+    return f"rgba({r},{g},{b},{a})"
+
+
 # ============================================================
-# PAGE CONFIG (UNA SOLA VOLTA, SUBITO)
+# PAGE CONFIG
 # ============================================================
 st.set_page_config(
     page_title="pariGINI • Esagoni",
@@ -73,33 +99,26 @@ LINE_COLORS = {
 }
 WALK_COLOR = "#9CA3AF"
 
+# Solo verde -> rosso (per score 1..10 o norm 0..1)
+GREEN_HEX = "#22c55e"
+RED_HEX = "#ef4444"
+
 # ============================================================
-# WHITE BACKGROUND + DARK TEXT (GLOBAL CSS) + FIX SEARCHBOX + FIX PRIMARY BUTTON
+# GLOBAL CSS
 # ============================================================
 st.markdown(
     """
 <style>
-/* ===========================
-   FORZA TEMA CHIARO (browser-level)
-   =========================== */
-:root, html {
-  color-scheme: light !important;
-}
-
-/* Sfondo sempre bianco */
+:root, html { color-scheme: light !important; }
 html, body { background: #ffffff !important; }
 [data-testid="stAppViewContainer"] { background: #ffffff !important; }
 [data-testid="stHeader"] { background: #ffffff !important; }
 [data-testid="stSidebar"] { background: #ffffff !important; }
 [data-testid="stSidebarContent"] { background: #ffffff !important; }
 
-/* Testi scuri */
 body, p, li, label, span, div { color: #111827 !important; }
-
-/* Riduci padding top e rendi pagina più "pulita" */
 .block-container { padding-top: 2.2rem; }
 
-/* Titolo più grande */
 .pg-title {
   font-size: 3.8rem;
   font-weight: 900;
@@ -107,7 +126,6 @@ body, p, li, label, span, div { color: #111827 !important; }
   margin: 0.6rem 0 0.5rem 0;
 }
 
-/* Bottoni base */
 div.stButton > button {
   border-radius: 12px;
   border: 1px solid rgba(17,24,39,0.18) !important;
@@ -118,7 +136,6 @@ div.stButton > button:hover {
   border-color: rgba(17,24,39,0.35) !important;
 }
 
-/* Primary button (Calcola Gini): chiaro con testo scuro, sempre leggibile */
 div.stButton > button[kind="primary"],
 div.stButton > button[data-testid="baseButton-primary"] {
   background: #e5e7eb !important;
@@ -131,15 +148,10 @@ div.stButton > button[data-testid="baseButton-primary"]:hover {
   border-color: rgba(17,24,39,0.35) !important;
 }
 
-/* Metric cards più leggibili */
 [data-testid="stMetricValue"] { color: #111827 !important; }
 [data-testid="stMetricLabel"] { color: rgba(17,24,39,0.75) !important; }
 
-/* ===========================
-   SEARCHBOX (dropdown) CHIARO
-   =========================== */
-
-/* input del searchbox – tutte le varianti BaseWeb */
+/* Searchbox */
 div[data-baseweb="input"],
 div[data-baseweb="base-input"],
 div[data-baseweb="input-container"],
@@ -168,14 +180,6 @@ div[data-baseweb="select"] input::placeholder {
   color: rgba(17,24,39,0.55) !important;
   -webkit-text-fill-color: rgba(17,24,39,0.55) !important;
 }
-
-/* bordo dell'input */
-div[data-baseweb="input"],
-div[data-baseweb="base-input"] {
-  border-color: rgba(17,24,39,0.18) !important;
-}
-
-/* popover e menu dei suggerimenti */
 div[data-baseweb="popover"],
 div[data-baseweb="popover"] > div {
   background: #f3f4f6 !important;
@@ -184,46 +188,25 @@ div[data-baseweb="popover"] > div {
   border: 1px solid rgba(17,24,39,0.18) !important;
   box-shadow: 0 10px 24px rgba(17,24,39,0.12) !important;
 }
-
 div[data-baseweb="menu"],
 div[data-baseweb="menu"] ul {
   background: #f3f4f6 !important;
   background-color: #f3f4f6 !important;
   color: #111827 !important;
 }
-
-div[data-baseweb="menu"] * {
-  color: #111827 !important;
-}
-
-div[data-baseweb="menu"] [role="option"],
-div[data-baseweb="menu"] li {
-  background: #f3f4f6 !important;
-  background-color: #f3f4f6 !important;
-}
-
 div[data-baseweb="menu"] [role="option"]:hover,
 div[data-baseweb="menu"] [role="option"][aria-selected="true"],
 div[data-baseweb="menu"] li:hover {
   background: #e5e7eb !important;
   background-color: #e5e7eb !important;
 }
-
-/* Tag / chip selezionato nella searchbox */
 div[data-baseweb="tag"],
 span[data-baseweb="tag"] {
   background-color: #e5e7eb !important;
   color: #111827 !important;
 }
 
-/* Icone SVG dentro la searchbox */
-div[data-baseweb="input"] svg,
-div[data-baseweb="select"] svg {
-  fill: rgba(17,24,39,0.55) !important;
-  color: rgba(17,24,39,0.55) !important;
-}
-
-/* Decorazioni laterali (sinistra) */
+/* Decorazioni */
 .metro-decor {
   position: fixed;
   left: 10px;
@@ -242,25 +225,19 @@ div[data-baseweb="select"] svg {
 .metro-decor .pill.small { height: 10px; }
 .metro-decor .pill.med   { height: 16px; }
 .metro-decor .pill.long  { height: 24px; }
-
-/* Nascondi decorazione su schermi piccoli (mobile) */
 @media (max-width: 768px) {
-  .metro-decor {
-    display: none !important;
-  }
+  .metro-decor { display: none !important; }
 }
 </style>
 """,
     unsafe_allow_html=True,
 )
-
 st.markdown("<div style='height:6px'></div>", unsafe_allow_html=True)
 
 # ============================================================
-# DECORAZIONI (SINISTRA, PICCOLE, COLORATE, ALMENO 2 LINEE DIVERSE)
+# DECORAZIONI
 # ============================================================
 def render_left_decor():
-    # Genera i colori una sola volta al caricamento della pagina
     if "decor_colors" not in st.session_state:
         keys = list(LINE_COLORS.keys())
         chosen = random.sample(keys, k=2)
@@ -274,12 +251,10 @@ def render_left_decor():
                 colors.append(WALK_COLOR)
             else:
                 colors.append(LINE_COLORS[chosen[i % len(chosen)]])
-        
         st.session_state.decor_colors = colors
-    
+
     colors = st.session_state.decor_colors
     sizes = ["small", "med", "small", "long", "small", "med"]
-    
     pills = "\n".join(
         [f"<div class='pill {sizes[i]}' style='background:{colors[i]}'></div>" for i in range(len(sizes))]
     )
@@ -330,8 +305,7 @@ def make_search_fn(map_key: str):
             return []
 
         results = geopf_completion(searchterm, terr="75", maximumResponses=8)
-        mp = {}
-        opts = []
+        mp, opts = {}, []
         for r in results:
             ft = r.get("fulltext")
             x = r.get("x")
@@ -339,7 +313,6 @@ def make_search_fn(map_key: str):
             if ft and x is not None and y is not None:
                 opts.append(ft)
                 mp[ft] = (float(x), float(y))
-
         st.session_state[map_key] = mp
         return opts
 
@@ -366,7 +339,7 @@ def address_autocomplete(label: str, key: str, placeholder: str):
 
 
 # ============================================================
-# ROUTE BARS (HTML/CSS)
+# ROUTE BARS (HTML/CSS)  [invariato, ma tenuto]
 # ============================================================
 def _norm_line_for_color(line):
     if line is None:
@@ -410,32 +383,8 @@ def _get_walk_split(details):
     if not isinstance(details, dict):
         return 0.0, 0.0
 
-    keys_start = [
-        "walk_time_start_min",
-        "walk_start_time_min",
-        "walk_start_min",
-        "walk_min_start",
-        "walk_time_min_start",
-    ]
-    keys_end = [
-        "walk_time_end_min",
-        "walk_end_time_min",
-        "walk_end_min",
-        "walk_min_end",
-        "walk_time_min_end",
-    ]
-
-    w_start = None
-    w_end = None
-
-    for k in keys_start:
-        if k in details and details.get(k) is not None:
-            w_start = float(details.get(k) or 0.0)
-            break
-    for k in keys_end:
-        if k in details and details.get(k) is not None:
-            w_end = float(details.get(k) or 0.0)
-            break
+    w_start = details.get("walk_time_start_min", None)
+    w_end = details.get("walk_time_end_min", None)
 
     total_walk = float(details.get("walk_time_min", 0.0) or 0.0)
     edges = details.get("edges", []) or []
@@ -481,7 +430,6 @@ def render_routes_html(results_df):
         return
 
     ok_df = ok_df.sort_values("i")
-
     max_total = 0.0
     precomp = []
     used_lines = set()
@@ -640,206 +588,206 @@ def render_routes_html(results_df):
 
 
 # ============================================================
-# GINI BAR (components.html)
+# COLOR MAP: verde -> rosso (no blu)
 # ============================================================
-def gini_to_color_hex(v):
-    v = float(np.clip(v, 0.0, 1.0))
-    blue = np.array([59, 130, 246])   # #3b82f6
-    green = np.array([34, 197, 94])   # #22c55e
-    amber = np.array([245, 158, 11])  # #f59e0b
-    red = np.array([239, 68, 68])     # #ef4444
-
-    if v <= 0.1:
-        t = v / 0.1 if 0.1 else 0
-        rgb = blue + (green - blue) * t
-    elif v <= 0.55:
-        t = (v - 0.1) / (0.55 - 0.1)
-        rgb = green + (amber - green) * t
-    else:
-        t = (v - 0.55) / (1 - 0.55)
-        rgb = amber + (red - amber) * t
-
-    rgb = np.clip(rgb.round().astype(int), 0, 255)
+def gini_to_green_red_hex(v01: float) -> str:
+    """
+    v01 in [0,1] -> colore lineare tra verde e rosso.
+    """
+    v = float(np.clip(v01, 0.0, 1.0))
+    g = np.array([34, 197, 94], dtype=float)   # #22c55e
+    r = np.array([239, 68, 68], dtype=float)   # #ef4444
+    rgb = g + (r - g) * v
+    rgb = np.clip(np.round(rgb).astype(int), 0, 255)
     return "#{:02x}{:02x}{:02x}".format(rgb[0], rgb[1], rgb[2])
 
 
-def render_hexagon_heatmap(hexes_gdf, metrics_df, labels_map=None):
-    """
-    Visualizza una mappa Plotly con esagoni colorati in base al Gini Index.
-    
-    - hexes_gdf: GeoDataFrame con esagoni (deve avere colonna 'id')
-    - metrics_df: DataFrame con colonne 'target_id', 'gini_time', e 'mean_time_min'
-    """
-    labels_map = labels_map or {}
+# ============================================================
+# FAST HEX MAP PREP (cache)
+# ============================================================
+@st.cache_data(show_spinner=False)
 
-    # Join dei dati: hexes_gdf.id = metrics_df.target_id
-    hex_merged = hexes_gdf.merge(
-        metrics_df[["target_id", "gini_time", "mean_time_min"]],
-        left_on="id",
-        right_on="target_id",
-        how="left"
-    )
-    
-    # Converti in WGS84 per visualizzazione
-    hex_merged_wgs84 = hex_merged.to_crs(epsg=4326)
-    
-    # Calcola centro della mappa
-    centroid = hex_merged_wgs84.unary_union.centroid
-    center = dict(lat=centroid.y, lon=centroid.x)
-    
-    fig = go.Figure()
-    
-    # Aggiungi esagoni colorati
-    for _, row in hex_merged_wgs84.iterrows():
-        poly = row.geometry
-        gini_val = row.get("gini_time")
-        mean_time = row.get("mean_time_min")
-        
-        # Estrai coordinate esterno del poligono
-        xs, ys = poly.exterior.xy
-        
-        # Colore in base al Gini
-        if pd.notna(gini_val) and np.isfinite(float(gini_val)):
-            color = gini_to_color_hex(float(gini_val))
-            gini_text = f"{float(gini_val):.4f}"
+# def prepare_hex_geojson_fast(_hexes_gdf, _centers_gdf, scale_factor=1.0, simplify_m=12.0):
+#     """
+#     Prepara geometrie esagoni:
+#       - NON scala (scale_factor=1.0 di default, gli esagoni coprono già tutta la città)
+#       - Semplifica per performance
+#       - Converte in GeoJSON con 'id' come featureidkey
+#     """
+#     hex_w = _hexes_gdf.copy()
+
+#     # Assicura CRS WGS84
+#     if hex_w.crs is None or hex_w.crs.to_epsg() != WGS84_EPSG:
+#         hex_w = hex_w.to_crs(epsg=WGS84_EPSG)
+
+#     # Semplifica in metrico per preservare topologia, poi riconverti
+#     if simplify_m and simplify_m > 0:
+#         hex_m = hex_w.to_crs(epsg=METRIC_EPSG)
+#         hex_m["geometry"] = hex_m["geometry"].simplify(float(simplify_m), preserve_topology=True)
+#         hex_w = hex_m.to_crs(epsg=WGS84_EPSG)
+
+#     # Centro mappa
+#     centroid = hex_w.unary_union.centroid
+#     center = dict(lat=float(centroid.y), lon=float(centroid.x))
+
+#     # Assicura colonna 'id'
+#     if "id" not in hex_w.columns:
+#         hex_w = hex_w.copy()
+#         hex_w["id"] = np.arange(len(hex_w), dtype=int)
+
+#     # GeoJSON con id stringa come indice
+#     hex_w = hex_w.copy()
+#     hex_w["id_str"] = hex_w["id"].astype(str)
+#     geojson = json.loads(hex_w.set_index("id_str").to_json())
+
+#     return geojson, center
+
+@st.cache_data(show_spinner=False)
+def prepare_hex_geojson_fast(_hexes_gdf, simplify_m=12.0):
+    hex_w = _hexes_gdf.copy().reset_index(drop=True)
+
+    if hex_w.crs is None or hex_w.crs.to_epsg() != WGS84_EPSG:
+        hex_w = hex_w.to_crs(epsg=WGS84_EPSG)
+
+    if simplify_m and simplify_m > 0:
+        hex_m = hex_w.to_crs(epsg=METRIC_EPSG)
+        hex_m["geometry"] = hex_m["geometry"].simplify(float(simplify_m), preserve_topology=True)
+        hex_w = hex_m.to_crs(epsg=WGS84_EPSG)
+
+    # Riassegna id progressivi 0,1,2,... identici a target_id
+    hex_w["id"] = np.arange(len(hex_w), dtype=int)
+
+    centroid = hex_w.geometry.union_all().centroid
+    center = dict(lat=float(centroid.y), lon=float(centroid.x))
+
+    hex_w["id_str"] = hex_w["id"].astype(str)
+    geojson = json.loads(hex_w.set_index("id_str").to_json())
+
+    return geojson, center
+
+
+def render_hexagon_map_fast(geojson, metrics_df):
+    """
+    Render molto veloce:
+      - 1 trace Choroplethmapbox
+      - colore continuo verde->rosso basato su FAIR INDEX:
+            fair_index = mean_time_min * (gini_time + 1)
+      - hover: "Gini: x.xxx, Tempo medio: yy min"
+    """
+    df = metrics_df.copy()
+
+    # id per match con geojson features
+    df["id_str"] = pd.to_numeric(df["target_id"], errors="coerce").astype("Int64").astype(str)
+
+    # --- Gini normale 0..1 ---
+    if "gini_time" in df.columns:
+        gini = pd.to_numeric(df["gini_time"], errors="coerce")
+    else:
+        gini = pd.Series(np.nan, index=df.index)
+
+    gini = gini.clip(lower=0.0, upper=1.0)
+
+    # --- Tempo medio ---
+    mean_time = pd.to_numeric(df.get("mean_time_min", np.nan), errors="coerce")
+
+    # --- Fair index (preferisci la colonna pre-calcolata) ---
+    if "fair_index" in df.columns:
+        fair = pd.to_numeric(df["fair_index"], errors="coerce")
+    else:
+        fair = mean_time * (gini + 1.0)
+
+    # --- Normalizzazione per la colorazione (0..1) ---
+    fair_valid = fair[np.isfinite(fair)]
+    if fair_valid.empty:
+        z = pd.Series(np.nan, index=df.index)
+        zmin, zmax = 0.0, 1.0
+    else:
+        # robust scaling: percentili per evitare outlier
+        lo = float(np.nanpercentile(fair_valid.to_numpy(dtype=float), 5))
+        hi = float(np.nanpercentile(fair_valid.to_numpy(dtype=float), 95))
+
+        # fallback se distribuzione troppo "stretta"
+        if not np.isfinite(lo) or not np.isfinite(hi) or hi <= lo:
+            lo = float(np.nanmin(fair_valid.to_numpy(dtype=float)))
+            hi = float(np.nanmax(fair_valid.to_numpy(dtype=float)))
+            if not np.isfinite(lo) or not np.isfinite(hi) or hi <= lo:
+                lo, hi = 0.0, lo + 1.0
+
+        z = (fair - lo) / (hi - lo)
+        z = z.clip(lower=0.0, upper=1.0)
+        zmin, zmax = 0.0, 1.0
+
+    # --- hover text: "Arrondissement: xx, Gini: x.xxx, Tempo medio: yy min" ---
+    hover = []
+    arr = df.get("c_ar", pd.Series([None] * len(df)))
+    for ar, gg, mt in zip(arr, gini, mean_time):
+        if pd.isna(ar):
+            atxt = "Arrondissement: N/A"
         else:
-            color = "#CCCCCC"  # grigio per valori mancanti
-            gini_text = "N/A"
+            atxt = f"Arrondissement: {str(ar)}"
 
-        # converti hex -> rgba per avere un fill semi-trasparente
-        def _hex_to_rgba(h, a):
-            h = str(h).lstrip("#")
-            if len(h) != 6:
-                return f"rgba(200,200,200,{a})"
-            r = int(h[0:2], 16)
-            g = int(h[2:4], 16)
-            b = int(h[4:6], 16)
-            return f"rgba({r},{g},{b},{a})"
+        if pd.isna(gg):
+            gtxt = "Gini: N/A"
+        else:
+            gtxt = f"Gini: {float(gg):.3f}"
 
-        fill_alpha = 0.35  # -> regola qui l'opacità del riempimento (0.0..1.0)
-        fillcol = _hex_to_rgba(color, fill_alpha)
+        if pd.isna(mt):
+            mtxt = "Tempo medio: N/A"
+        else:
+            mtxt = f"Tempo medio: {fmt_min(mt)} min"
 
-        # Hover text
-        zone_id = row.get("id")
-        try:
-            zone_key = str(int(zone_id))
-        except Exception:
-            zone_key = str(zone_id) if zone_id is not None else None
+        # mostra arrondissement, Gini e tempo medio (nessun indirizzo/label)
+        hover.append(f"{atxt} <br> {gtxt}, {mtxt}")
 
-        label = labels_map.get(zone_key) if zone_key is not None else None
-        if not label:
-            label = f"Zona {zone_key}" if zone_key is not None else "Zona ?"
+   
 
-        hover_text = f"<b>{label}</b><br>Gini: {gini_text} <br>Tempo medio: {fmt_min(mean_time)} min"
+    # Scala cromatica a 5 punti (suddivisione uniforme 0.25)
+    # colorscale = [
+    # [0.0, '#059669'],   # Verde Smeraldo (Ottimo)
+    # [0.25, '#93a750'],  # Verde Oliva (Buono)
+    # [0.5, '#cb9e39'],   # Ocra/Giallo sporco (Neutro/Warning)
+    # [0.75, '#e2792a'],  # Arancio (Critico)
+    # [1.0, '#dc2626']    # Rosso (Allarme)
+    # ] #059669,#a8ba31,#f0951b,#dc2626
 
-        fig.add_trace(go.Scattermapbox(
-            lon=list(xs),
-            lat=list(ys),
-            mode="lines",
-            name=gini_text,
-            line=dict(color=color, width=2),
-            fill="toself",
-            fillcolor=fillcol,
-            opacity=1.0,
-            hovertext=hover_text,
+    colorscale = [
+    [0.0, '#059669'],   # Verde Smeraldo (Ottimo)
+    [0.25, '#93a750'],  # Verde Oliva (Buono)
+    [0.5, '#e2792a'],  # Arancio (Critico)
+    [1.0, '#dc2626']    # Rosso (Allarme)
+    ]
+
+
+    fig = go.Figure(
+        go.Choroplethmap(
+            geojson=geojson,
+            # IMPORTANTISSIMO:
+            # se nel tuo geojson feature['id'] è stringa, featureidkey="id" va bene.
+            # altrimenti (più comune) è feature['properties']['id'] e allora usare featureidkey="properties.id"
+            featureidkey="id",
+            locations=df["id_str"],
+            z=z,
+            colorscale=colorscale,
+            zmin=zmin,
+            zmax=zmax,
+            marker=dict(
+                line=dict(width=0, color="rgba(0,0,0,0)"),
+                opacity=0.40,
+            ),
+            hovertext=hover,
             hoverinfo="text",
-            showlegend=False,
-        ))
-    
-    # Layout
-    fig.update_layout(
-        title="Mappa di Equità - Gini Index per Zona (Verde=Equo, Rosso=Inequo)",
-        margin=dict(l=0, r=0, t=50, b=0),
-        mapbox=dict(
-            style="carto-positron",
-            center=center,
-            zoom=11
-        ),
-        hovermode="closest",
-        height=600,
+            showscale=False,
+        )
     )
-    
+
+    fig.update_layout(
+        margin=dict(l=0, r=0, t=40, b=0),
+        map=dict(style="carto-positron", zoom=11),
+        height=620,
+    )
+
     return fig
 
-
-def render_gini_bar(gini_value: float):
-    st.header("Indice di Gini (Disuguaglianza)")
-
-    if not np.isfinite(gini_value):
-        st.warning("Valore Gini non disponibile.")
-        return
-
-    v = float(np.clip(gini_value, 0.0, 1.0))
-    pct = v * 100.0
-    color = gini_to_color_hex(v)
-
-    html = f"""
-<!doctype html>
-<html>
-<head>
-<meta charset="utf-8"/>
-<style>
-  .wrap {{
-    max-width: 980px;
-    font-family: -apple-system,BlinkMacSystemFont,"Segoe UI",Roboto,Arial,sans-serif;
-    color: rgba(17,24,39,0.92);
-  }}
-  .bar {{
-    position: relative;
-    height: 18px;
-    border-radius: 999px;
-    background: linear-gradient(90deg, #22c55e 0%, #f59e0b 55%, #ef4444 100%);
-    border: 1px solid rgba(17,24,39,0.18);
-  }}
-  .marker {{
-    position:absolute;
-    left:{pct:.2f}%;
-    top:-20px;
-    transform: translateX(-50%);
-    font-weight: 900;
-    font-size: 16px;
-    color: rgba(17,24,39,0.95);
-  }}
-  .tick {{
-    position:absolute;
-    left:{pct:.2f}%;
-    top:0px;
-    transform: translateX(-50%);
-    width: 2px;
-    height: 18px;
-    background: rgba(17,24,39,0.95);
-  }}
-  .labels {{
-    display:flex;
-    justify-content:space-between;
-    margin-top:6px;
-    font-size: 13px;
-    color: rgba(17,24,39,0.78);
-  }}
-  .value {{
-    margin-top: 10px;
-    font-size: 22px;
-    font-weight: 900;
-    color: {color};
-  }}
-</style>
-</head>
-<body style="margin:0;background:transparent;">
-  <div class="wrap">
-    <div class="bar">
-      <div class="marker">▼</div>
-      <div class="tick"></div>
-    </div>
-    <div class="labels">
-      <div>Massima uguaglianza</div>
-      <div>Massima disuguaglianza</div>
-    </div>
-    <div class="value">{v:.4f}</div>
-  </div>
-</body>
-</html>
-"""
-    components.html(html, height=115, scrolling=False)
 
 
 # ============================================================
@@ -866,29 +814,45 @@ def load_graph():
 
 @st.cache_data(show_spinner=False)
 def load_hexagon_data():
-    centers_gdf = gpd.read_file("./centri_esagoni_parigi.geojson")
-    hexes_gdf = gpd.read_file("./esagoni_parigi.geojson")
-    return centers_gdf, hexes_gdf
+    hexes_gdf = gpd.read_file("./esagoni_parigi_simplified.geojson")
+    return hexes_gdf
 
 
 @st.cache_data(show_spinner=False)
-def load_center_labels():
-    with open("./id_to_labels_centers.json", "r", encoding="utf-8") as f:
-        data = json.load(f)
-    return data if isinstance(data, dict) else {}
+def load_precomputed_safe():
+    """
+    Tenta di caricari dati precomputati.
+    Se errore, ritorna None (fallback a Dijkstra).
+    """
+    try:
+        precomp = load_precomputed_data(
+            npz_path="./precomputed_node_times.npz",
+            json_path="./precomputed_node_times_meta.json"
+        )
+        return precomp
+    except Exception as e:
+        st.write(f"⚠️ Precomputed non disponibili ({type(e).__name__}): userò Dijkstra.")
+        return None
 
 
-with st.spinner("Caricamento rete metro e griglia esagonale..."):
+with st.spinner("Caricamento rete metro, griglia esagonale e dati precomputati..."):
     try:
         G, node_index = load_graph()
-        centers_gdf, hexes_gdf = load_hexagon_data()
-        center_labels = load_center_labels()
+        hexes_gdf = load_hexagon_data()
+        precomputed = load_precomputed_safe()
     except Exception as e:
         st.error(f"Errore nel caricamento: {e}")
         st.stop()
 
+# Prepara geometrie mappa (cache) una volta: ricentra + scala + semplifica + geojson
+geojson_hex, map_center = prepare_hex_geojson_fast(
+    _hexes_gdf=hexes_gdf,
+)
+
+
+
 # ============================================================
-# PARAMETRI ROUTING FISSI (non mostrati)
+# PARAMETRI ROUTING FISSI
 # ============================================================
 max_line_changes = 1
 change_penalty_min = 2.0
@@ -918,12 +882,7 @@ top_row = st.columns([1, 1, 8])
 with top_row[0]:
     st.button("Aggiungi", use_container_width=True, on_click=add_friend)
 with top_row[1]:
-    st.button(
-        "Rimuovi",
-        use_container_width=True,
-        disabled=(st.session_state.n_friends <= 2),
-        on_click=remove_friend,
-    )
+    st.button("Rimuovi", use_container_width=True, disabled=(st.session_state.n_friends <= 2), on_click=remove_friend)
 with top_row[2]:
     st.caption("Minimo 2 amici. Scrivi gli indirizzi e seleziona un suggerimento.")
 
@@ -941,31 +900,33 @@ for i in range(st.session_state.n_friends):
         if coords:
             starts.append(coords)
 
-# ============================================================
-# VALIDAZIONE (min 2 amici)
-# ============================================================
 ready = len(starts) >= 2
-
 if not ready:
     st.warning(f"Manca: almeno 2 amici (con indirizzo selezionato). Attualmente: {len(starts)}.")
 
 # ============================================================
 # ANALYSIS & RESULTS
 # ============================================================
-if st.button(
-    "Calcola Gini",
-    type="primary",
-    use_container_width=True,
-    disabled=not ready,
-):
+if st.button("Calcola Gini", type="primary", use_container_width=True, disabled=not ready):
     st.divider()
 
     with st.spinner("Calcolo tempi di percorrenza per tutti i punti della città..."):
         try:
-            # Estrai coordinate dei centri esagoni:
-            targets_lonlat = [(geom.x, geom.y) for geom in centers_gdf.geometry]
-            
-            metrics_df, per_target_results = accessibility_inequality_to_targets(
+            # Usa i centroidi degli esagoni come target di routing.
+            hexes_base = hexes_gdf
+            if hexes_base.crs is None:
+                hexes_base = hexes_base.set_crs(epsg=WGS84_EPSG, allow_override=True)
+            hexes_metric = hexes_base.to_crs(epsg=METRIC_EPSG)
+            centroids_metric = hexes_metric.geometry.centroid
+            centroids_wgs84 = gpd.GeoSeries(
+                centroids_metric, crs=METRIC_EPSG
+            ).to_crs(epsg=WGS84_EPSG)
+            targets_lonlat = [
+                (geom.x, geom.y)
+                for geom in centroids_wgs84
+            ]
+
+            metrics_df = accessibility_inequality_to_targets(
                 G,
                 starts_lonlat=starts,
                 targets_lonlat=targets_lonlat,
@@ -976,66 +937,68 @@ if st.button(
                 max_walk_min_end=15.0,
                 max_candidate_stations=25,
                 allow_walk_only=True,
-                keep_details=True,
-                return_per_target_df=True,
-                balance_time_gini=True
+                keep_details=False,          # keep_details=True è molto pesante: disattivalo per velocità
+                return_per_target_df=False,  # evita dict gigante in memoria
+                precomputed=precomputed,     # O dati precomputati (veloce) O None (Dijkstra)
             )
+
+            # Aggiungi c_ar dagli esagoni (mappa id target -> arrondissement)
+            if "c_ar" in hexes_gdf.columns and "target_id" in metrics_df.columns:
+                hexes_ar = hexes_gdf.reset_index(drop=True)["c_ar"]
+                ar_map = pd.Series(hexes_ar.values, index=np.arange(len(hexes_ar))).to_dict()
+                metrics_df = metrics_df.copy()
+                metrics_df["c_ar"] = metrics_df["target_id"].map(ar_map)
         except Exception as e:
             st.error(f"Errore nel calcolo: {e}")
             st.stop()
 
-    # --- normalizza rispetto alla media delle medie dei tempi (come versione "bar") --- NO CLIPPING
-    if "mean_time_min" in metrics_df.columns and metrics_df["mean_time_min"].notna().any():
-        mean_of_means = float(metrics_df["mean_time_min"].mean(skipna=True))
-        if np.isfinite(mean_of_means) and mean_of_means > 0:
-            if "gini_time" in metrics_df.columns:
-                gini_raw = pd.to_numeric(metrics_df["gini_time"], errors="coerce")
-                metrics_df["gini_time_norm"] = gini_raw / mean_of_means
-            else:
-                metrics_df["gini_time_norm"] = np.nan
-        else:
-            metrics_df["gini_time_norm"] = np.nan
-    else:
-        metrics_df["gini_time_norm"] = np.nan
-
-
-    # Visualizza la heatmap degli esagoni colorati per Gini
+    # ===========================
+    # MAPPA (FAST)
+    # ===========================
     st.subheader("Mappa di equità - Gini Index per zona")
-    heatmap_df = metrics_df[["target_id", "gini_time_norm", "mean_time_min"]].rename(
-        columns={"gini_time_norm": "gini_time"}
-    )
-    fig = render_hexagon_heatmap(hexes_gdf, heatmap_df, labels_map=center_labels)
-    st.plotly_chart(fig, use_container_width=True)
 
-    # Spiegazione Gini
+    fig_map = render_hexagon_map_fast(
+        geojson=geojson_hex,
+        metrics_df=metrics_df,
+    )
+    # centra mappa
+    fig_map.update_layout(map=dict(center=map_center, style="carto-positron", zoom=11))
+    st.plotly_chart(fig_map, use_container_width=True)
+
     st.info(
-        """
-**Cosa significa il Gini Index nella mappa?**
+    """
+**Interpretazione**
+- Verde: migliore accessibilità “fair” (tempo medio basso e/o disuguaglianza bassa)
+- Rosso: peggiore accessibilità “fair” (tempo medio alto e/o disuguaglianza alta)
 
-- Gini = 0 (VERDE): massima uguaglianza - tutti gli amici impiegano lo stesso tempo
-- Gini = 1 (ROSSO): massima disuguaglianza - tempi molto diversi tra gli amici
-- Gini alto: poco equo per questa destinazione
-- Gini basso: equo per questa destinazione
-
-La mappa mostra il Gini Index da ogni punto della città verso tutti i vostri amici.
+Il colore usa **fair_index = mean_time_min × (gini_time + 1)**.
+In hover vedi: **Gini (0..1), Tempo medio (min)**.
 """
-    )
+)
 
-    # Statistiche globali
-    st.subheader("Statistiche della zona - Gini Index")
-    gini_values = metrics_df["gini_time_norm"].dropna()
-    if len(gini_values) > 0:
+
+    # ===========================
+    # STATISTICHE (usa gini_time)
+    # ===========================
+    st.subheader("Statistiche globali (Gini continuo)")
+    gini_norm = pd.to_numeric(metrics_df.get("gini_time"), errors="coerce").dropna()
+    if not gini_norm.empty:
         c1, c2, c3, c4 = st.columns(4)
         with c1:
-            st.metric("Min Gini", f"{gini_values.min():.4f}")
+            st.metric("Min Gini", f"{gini_norm.min():.4f}")
         with c2:
-            st.metric("Medio Gini", f"{gini_values.mean():.4f}")
+            st.metric("Media Gini", f"{gini_norm.mean():.4f}")
         with c3:
-            st.metric("Max Gini", f"{gini_values.max():.4f}")
+            st.metric("Max Gini", f"{gini_norm.max():.4f}")
         with c4:
-            st.metric("Zone valide", f"{len(gini_values)}/{len(metrics_df)}")
+            st.metric("Zone valide", f"{len(gini_norm)}/{len(metrics_df)}")
+    else:
+        st.info("Gini non disponibile (nessuna zona valida).")
 
-    # Export dei risultati
+
+    # ===========================
+    # EXPORT
+    # ===========================
     with st.expander("Esporta risultati", expanded=False):
         col1, col2 = st.columns(2)
 
@@ -1050,10 +1013,10 @@ La mappa mostra il Gini Index da ogni punto della città verso tutti i vostri am
 
         with col2:
             summary = {
-                "mean_gini": float(gini_values.mean()) if len(gini_values) > 0 else None,
-                "min_gini": float(gini_values.min()) if len(gini_values) > 0 else None,
-                "max_gini": float(gini_values.max()) if len(gini_values) > 0 else None,
-                "n_valid_zones": int(len(gini_values)),
+                "mean_gini_norm": float(gini_norm.mean()) if not gini_norm.empty else None,
+                "min_gini_norm": float(gini_norm.min()) if not gini_norm.empty else None,
+                "max_gini_norm": float(gini_norm.max()) if not gini_norm.empty else None,
+                "n_valid_zones": int(len(gini_norm)),
                 "n_total_zones": int(len(metrics_df)),
                 "n_starts": int(len(starts)),
                 "routing": {
@@ -1063,6 +1026,11 @@ La mappa mostra il Gini Index da ogni punto della città verso tutti i vostri am
                     "max_walk_min_end": 15.0,
                     "max_candidate_stations": 25,
                     "allow_walk_only": True,
+                },
+                "map_render": {
+                    "renderer": "plotly choroplethmapbox (single trace)",
+                    "scale_factor_hex": 2.0,
+                    "simplify_m": 12.0,
                 },
             }
             json_data = json.dumps(summary, indent=2)
@@ -1082,8 +1050,8 @@ st.markdown(
 ---
 **pariGINI**
 
-Dati: RATP Metro Network
-Autocomplete: Géoplateforme (IGN) - completion
+Dati: RATP Metro Network  
+Autocomplete: Géoplateforme (IGN) - completion  
 
 Francesco Farina e Francesco Paolo Savatteri. Per omett e per tutt3
 """

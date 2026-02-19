@@ -32,6 +32,85 @@ START_LINE_PENALTY_MIN = 0.0      # penalità per inizio linea
 
 
 # =========================
+# PRECOMPUTED DATA LOADING
+# =========================
+
+def load_precomputed_data(npz_path: str, json_path: str = None):
+    """
+    Carica dati precomputati da NPZ e JSON opzionali.
+    
+    Returns:
+        dict con chiavi:
+        - 'nodes': lista di nomi nodi
+        - 'node_to_idx': {node_name -> idx}
+        - 'times_min': matrice N×N tempi totali
+        - 'metro_time': matrice N×N tempi metro
+        - 'line_changes': matrice N×N numero cambi
+        - 'distinct_lines': matrice N×N numero linee distinte
+        - 'metadata': dict da JSON (se disponibile)
+    """
+    import json
+    from pathlib import Path
+    
+    # Carica NPZ
+    npz_data = np.load(npz_path, allow_pickle=True)
+    nodes = list(npz_data['nodes'])
+    node_to_idx = {node: idx for idx, node in enumerate(nodes)}
+    
+    precomputed = {
+        'nodes': nodes,
+        'node_to_idx': node_to_idx,
+        'times_min': npz_data['times_min'],
+        'metro_time': npz_data.get('metro_time', None),
+        'line_changes': npz_data.get('line_changes', None),
+        'distinct_lines': npz_data.get('distinct_lines', None),
+        'metadata': None,
+    }
+    
+    # Carica JSON metadata se disponibile
+    if json_path is not None:
+        try:
+            json_path = Path(json_path)
+            if json_path.exists():
+                with open(json_path, 'r', encoding='utf-8') as f:
+                    precomputed['metadata'] = json.load(f)
+        except Exception:
+            pass
+    
+    return precomputed
+
+
+def lookup_precomputed_time(
+    precomputed,
+    source,
+    target,
+):
+    """
+    Lookup O(1) nel dati precomputati.
+    
+    Returns:
+        (times_min, metro_time, line_changes, distinct_lines) oppure raises KeyError
+    """
+    node_to_idx = precomputed['node_to_idx']
+    times_min = precomputed['times_min']
+    metro_time = precomputed.get('metro_time', None)
+    line_changes = precomputed.get('line_changes', None)
+    distinct_lines = precomputed.get('distinct_lines', None)
+    
+    if source not in node_to_idx or target not in node_to_idx:
+        raise KeyError(f"Nodo non trovato nei dati precomputati: source={source} o target={target}")
+    
+    i, j = node_to_idx[source], node_to_idx[target]
+    
+    t_min = float(times_min[i, j])
+    m_time = float(metro_time[i, j]) if metro_time is not None else np.nan
+    l_changes = int(line_changes[i, j]) if line_changes is not None else np.nan
+    d_lines = int(distinct_lines[i, j]) if distinct_lines is not None else np.nan
+    
+    return t_min, m_time, l_changes, d_lines
+
+
+# =========================
 # GRAPH INITIALIZATION
 # =========================
 
@@ -172,14 +251,50 @@ def shortest_path_max_1_change(
     target,
     max_changes=MAX_LINE_CHANGES,
     change_penalty_min=CHANGE_PENALTY_MIN,
-    start_line_penalty_min=START_LINE_PENALTY_MIN
+    start_line_penalty_min=START_LINE_PENALTY_MIN,
+    precomputed=None,
 ):
     """
     Dijkstra su stato espanso: (node, current_line, changes_used).
 
     Permette al massimo max_changes cambi di linea.
+    Se precomputed è disponibile, fa lookup O(1) al posto di Dijkstra, con fallback a Dijkstra se non trovato.
+    
+    Args:
+        G: grafo NetworkX
+        source: nodo di partenza
+        target: nodo di destinazione
+        max_changes: max numero di cambi linea
+        change_penalty_min: penalità per cambio linea (minuti)
+        start_line_penalty_min: penalità per inizio linea (minuti)
+        precomputed: dict caricato da load_precomputed_data() oppure None
+    
     Ritorna: path_nodes, edge_records, metro_time_min, lines_sequence, line_changes, total_cost
     """
+    
+    # Prova lookup veloce dai dati precomputati
+    if precomputed is not None:
+        try:
+            times_min, metro_time, line_changes_count, distinct_lines_count = lookup_precomputed_time(
+                precomputed, source, target
+            )
+            
+            if np.isfinite(times_min):
+                # Lookup riuscito! Ritorna risultati veloce senza grafo
+                # path_nodes vuoto (non abbiamo il percorso), ma tempo è velocissimo
+                return (
+                    [],  # path_nodes vuoto
+                    [],  # edge_records vuoto
+                    float(metro_time),  # metro_time_min
+                    [],  # lines_sequence vuoto
+                    int(line_changes_count),  # line_changes
+                    float(times_min),  # total_cost
+                )
+        except (KeyError, IndexError, ValueError):
+            # Fallback a Dijkstra se lookup fallisce
+            pass
+    
+    # ===== DIJKSTRA COMPLETO (fallback o quando precomputed non è disponibile) =====
     dist = {}
     prev = {}
 
@@ -285,6 +400,7 @@ def route_time_minutes(
     max_walk_min_end=15.0,
     max_candidate_stations=25,
     allow_walk_only=True,
+    precomputed=None,
 ):
     """
     Calcola tempo da start a end includendo camminata + metro con vincolo cambi.
@@ -295,6 +411,10 @@ def route_time_minutes(
     - salva dettagli separati di cammino start/end: walk_time_start_min, walk_time_end_min
       e relative distanze: walk_dist_start_m, walk_dist_end_m
     - opzionale: allow_walk_only prova anche camminata diretta e prende il minimo.
+    - se precomputed è disponibile, usa lookup O(1) al posto di Dijkstra (con fallback)
+
+    Args:
+        precomputed: dict caricato da load_precomputed_data() o None
 
     Ritorna: (best_total_time_min, details_dict)
     """
@@ -340,6 +460,7 @@ def route_time_minutes(
                     u1,
                     max_changes=max_line_changes,
                     change_penalty_min=change_penalty_min,
+                    precomputed=precomputed,
                 )
                 pairs_with_path += 1
 
@@ -461,12 +582,14 @@ def route_time_minutes(
 
 import numpy as np
 
-def gini_coefficient(values, normalize=True, square_x=False, balance_time=True):
+def gini_coefficient(values, normalize=True):
     """Gini per array di valori non-negativi.
     Se normalize=True, normalizza dividendo per il massimo possibile (n-1)/n.
     Se square_x=True, usa x^2 (dopo clip a 0 e prima del calcolo).
-    Se balance_time=True, bilancia Gini normalizzato con il tempo di percorrenza medio
     Ritorna NaN se input vuoto / somma <= 0 / n < 2 (in normalizzato).
+
+    Nota: il bilanciamento con il tempo medio non viene piu applicato qui; la
+    ponderazione avviene a livello di target con softmax dei tempi medi.
     """
     x = np.asarray(values, dtype=float)
     x = x[np.isfinite(x)]
@@ -474,13 +597,6 @@ def gini_coefficient(values, normalize=True, square_x=False, balance_time=True):
         return np.nan
 
     x = np.clip(x, 0, None)
-
-    if balance_time:
-        mean = x.mean()
-
-
-    if square_x:
-        x = x**2
 
     s = x.sum()
     if s <= 0:
@@ -503,9 +619,6 @@ def gini_coefficient(values, normalize=True, square_x=False, balance_time=True):
 
     g_norm = float(np.clip(g_norm, 0.0, 1.0))
 
-    if balance_time and mean > 0:
-        return g_norm * mean
-
     return g_norm
 
 def theil_index(values):
@@ -520,7 +633,6 @@ def theil_index(values):
         return np.nan
     x_pos = x[x > 0]
     return float(np.mean((x_pos / mu) * np.log(x_pos / mu)))
-
 
 # =========================
 # BATCH: MANY STARTS -> ONE TARGET
@@ -539,15 +651,16 @@ def accessibility_inequality_to_target(
     max_candidate_stations=25,
     allow_walk_only=True,
     keep_details=False,
-    balance_time_gini=True
+    precomputed=None,
 ):
     """
     Calcola tempi di percorrenza da molti start verso un target.
     Ritorna: (results_df, metrics_dict)
 
-    Aggiornamento:
-    - salva anche walk_time_start_min / walk_time_end_min e walk_dist_start_m / walk_dist_end_m
-      quando disponibili nei dettagli.
+    Salva anche walk_time_start_min / walk_time_end_min e walk_dist_start_m / walk_dist_end_m quando disponibili.
+    
+    Args:
+        precomputed: dict caricato da load_precomputed_data() o None
     """
     rows = []
 
@@ -566,7 +679,6 @@ def accessibility_inequality_to_target(
             "metro_time_min": np.nan,
             "walk_time_min": np.nan,
 
-            # ✅ nuovi campi
             "walk_time_start_min": np.nan,
             "walk_time_end_min": np.nan,
             "walk_dist_start_m": np.nan,
@@ -595,6 +707,8 @@ def accessibility_inequality_to_target(
             kwargs["max_walk_min_end"] = float(max_walk_min_end)
             kwargs["max_candidate_stations"] = int(max_candidate_stations)
             kwargs["allow_walk_only"] = bool(allow_walk_only)
+            if precomputed is not None:
+                kwargs["precomputed"] = precomputed
 
             total, info = route_time_minutes(G, start, target_lonlat, **kwargs)
 
@@ -602,7 +716,6 @@ def accessibility_inequality_to_target(
             rec["metro_time_min"] = float(info.get("metro_time_min", np.nan))
             rec["walk_time_min"] = float(info.get("walk_time_min", np.nan))
 
-            # ✅ nuovi dettagli (se presenti)
             rec["walk_time_start_min"] = float(info.get("walk_time_start_min", np.nan))
             rec["walk_time_end_min"] = float(info.get("walk_time_end_min", np.nan))
             rec["walk_dist_start_m"] = float(info.get("walk_dist_start_m", np.nan))
@@ -624,20 +737,25 @@ def accessibility_inequality_to_target(
 
         rows.append(rec)
 
-    results_df = pd.DataFrame(rows)
+        results_df = pd.DataFrame(rows)
 
     valid_times = results_df.loc[results_df["ok"], "total_time_min"].to_numpy(dtype=float)
+    valid_times = valid_times[np.isfinite(valid_times)]
+    valid_times = valid_times[valid_times >= 0]
+
+    mean_time = float(np.mean(valid_times)) if valid_times.size else np.nan
+    gini_norm = gini_coefficient(valid_times, normalize=True) if valid_times.size else np.nan
 
     metrics = {
         "n_total": int(len(results_df)),
         "n_ok": int(np.sum(results_df["ok"])),
         "share_ok": float(np.mean(results_df["ok"])) if len(results_df) else np.nan,
-        "mean_time_min": float(np.mean(valid_times)) if valid_times.size else np.nan,
+        "mean_time_min": mean_time,
         "median_time_min": float(np.median(valid_times)) if valid_times.size else np.nan,
         "p90_time_min": float(np.percentile(valid_times, 90)) if valid_times.size else np.nan,
         "min_time_min": float(np.min(valid_times)) if valid_times.size else np.nan,
         "max_time_min": float(np.max(valid_times)) if valid_times.size else np.nan,
-        "gini_time": gini_coefficient(valid_times, normalize=True, square_x=True, balance_time=balance_time_gini),
+        "gini_time": gini_norm,              # 0..1
         "theil_time": theil_index(valid_times),
     }
 
@@ -646,9 +764,8 @@ def accessibility_inequality_to_target(
 
 
 # =========================
-# BATCH: MANY STARTS -> MANY TARGETS (ITERATE GINI OVER TARGETS)
+# BATCH: MANY STARTS -> MANY TARGETS
 # =========================
-
 def accessibility_inequality_to_targets(
     G,
     starts_lonlat,
@@ -663,30 +780,32 @@ def accessibility_inequality_to_targets(
     allow_walk_only=True,
     keep_details=False,
     return_per_target_df=True,
-    balance_time_gini=True
+    precomputed=None,
 ):
     """
-    Calcola l'inequality (incl. Gini) da molti start verso molti target.
+    Calcola le metriche (tempo medio, Gini, Theil, ecc.) da molti start verso molti target.
 
-    Parametri:
-    - starts_lonlat: iterable di (lon, lat)
-    - targets_lonlat: iterable di (lon, lat)
-    - return_per_target_df:
-        - True  -> ritorna anche un dict {target_id: results_df}
-        - False -> ritorna solo il dataframe delle metriche
+    Output chiave per la mappa:
+      - gini_time        : Gini normalizzato classico in [0,1]
+      - gini_time_norm   : alias di gini_time (stesso valore, [0,1]) per compatibilità
+      - mean_time_min    : tempo medio verso quel target
+      - fair_index       : mean_time_min * (gini_time + 1)
+                           (se gini=0 => *1, se gini=1 => *2)
 
-    Ritorna:
-    - metrics_df: DataFrame con una riga per target (include gini_time, theil_time, ecc.)
-    - per_target_results (opzionale): dict con i results_df per ogni target
+    Ritorni:
+      - se return_per_target_df=True  -> (metrics_df, per_target_results)
+      - se return_per_target_df=False -> metrics_df
+    
+    Args:
+        precomputed: dict caricato da load_precomputed_data() o None
     """
     if node_index is None:
         node_index = build_node_index(G)
 
-    per_target_results = {}   # target_id -> results_df
+    per_target_results = {}
     metrics_rows = []
 
     for t_idx, target in enumerate(targets_lonlat):
-        # riusa esattamente la funzione esistente
         df, metrics = accessibility_inequality_to_target(
             G,
             starts_lonlat=starts_lonlat,
@@ -700,10 +819,9 @@ def accessibility_inequality_to_targets(
             max_candidate_stations=max_candidate_stations,
             allow_walk_only=allow_walk_only,
             keep_details=keep_details,
-            balance_time_gini=balance_time_gini,
+            precomputed=precomputed,
         )
 
-        # aggiungi identificativi/coordinate target alla riga metriche
         row = dict(metrics)
         row.update({
             "target_id": int(t_idx),
@@ -717,10 +835,23 @@ def accessibility_inequality_to_targets(
 
     metrics_df = pd.DataFrame(metrics_rows).sort_values("target_id").reset_index(drop=True)
 
+    # ---- Gini normale 0..1 ----
+    g = pd.to_numeric(metrics_df.get("gini_time"), errors="coerce")
+    g = g.clip(lower=0.0, upper=1.0)
+
+    # manteniamo entrambe per compatibilità (identiche)
+    metrics_df["gini_time"] = g
+
+    # ---- Indice "fair" per colorazione esagoni ----
+    mean_t = pd.to_numeric(metrics_df.get("mean_time_min"), errors="coerce")
+    metrics_df["fair_index"] = mean_t * (g + 1.0)
+
     if return_per_target_df:
         return metrics_df, per_target_results
 
     return metrics_df
+
+
 
 
 # =========================

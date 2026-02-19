@@ -924,7 +924,6 @@ if clicked:
                 allow_walk_only=True,
                 keep_details=True,
                 return_per_target_df=True,
-                balance_time_gini=True
             )
         except Exception as e:
             st.error(f"Errore nel calcolo multi-target: {e}")
@@ -936,23 +935,33 @@ if clicked:
     label_by_id = {i: target_addresses[i] for i in range(len(targets))}
     metrics_df["target_label"] = metrics_df["target_id"].map(label_by_id)
 
-    # --- normalizza rispetto alla media delle medie dei tempi --- CLIPPING A 1
-    if "mean_time_min" in metrics_df.columns and metrics_df["mean_time_min"].notna().any():
-        mean_of_means = float(metrics_df["mean_time_min"].mean(skipna=True))
-        if np.isfinite(mean_of_means) and mean_of_means > 0:
-            if "gini_time" in metrics_df.columns:
-                metrics_df["gini_time"] = metrics_df["gini_time"] / mean_of_means
-                metrics_df["gini_time"] = metrics_df["gini_time"].clip(0.0, 1.0)
+    # --- Fair index (preferisci la colonna pre-calcolata) ---
+    if "fair_index" in metrics_df.columns:
+        fair = pd.to_numeric(metrics_df["fair_index"], errors="coerce")
+    else:
+        if "mean_time_min" in metrics_df.columns:
+            mean_time = pd.to_numeric(metrics_df["mean_time_min"], errors="coerce")
+        else:
+            mean_time = pd.Series(np.nan, index=metrics_df.index)
+
+        if "gini_time" in metrics_df.columns:
+            gini = pd.to_numeric(metrics_df["gini_time"], errors="coerce")
+        else:
+            gini = pd.Series(np.nan, index=metrics_df.index)
+
+        fair = mean_time * (gini + 1.0)
+
+    metrics_df["fair_index"] = fair
 
     # --- ordine colonne (solo il necessario) ---
-    cols_front = ["target_label", "gini_time", "mean_time_min", "min_time_min", "max_time_min", "n_ok", "n_total"]
+    cols_front = ["target_label", "fair_index", "gini_time", "mean_time_min", "min_time_min", "max_time_min", "n_ok", "n_total"]
     cols_existing = [c for c in cols_front if c in metrics_df.columns]
     other_cols = [c for c in metrics_df.columns if c not in cols_existing]
     metrics_df = metrics_df[cols_existing + other_cols]
 
     # --- ordina per equità ---
-    if "gini_time" in metrics_df.columns:
-        metrics_df = metrics_df.sort_values("gini_time", ascending=True).reset_index(drop=True)
+    if "fair_index" in metrics_df.columns:
+        metrics_df = metrics_df.sort_values("fair_index", ascending=True, na_position="last").reset_index(drop=True)
 
     # salva in sessione
     st.session_state.targets_metrics_df = metrics_df
@@ -972,11 +981,12 @@ if metrics_df is not None and len(metrics_df) > 0:
     # ============================================================
     st.subheader("Classifica destinazioni (più equa → meno equa)")
 
-    # --- TOP INFO: mostra subito il target col Gini minimo ---
-    if "gini_time" in metrics_df.columns and metrics_df["gini_time"].notna().any():
-        best_row = metrics_df.loc[metrics_df["gini_time"].idxmin()]
+    # --- TOP INFO: mostra subito il target col Fair Index minimo ---
+    if "fair_index" in metrics_df.columns and metrics_df["fair_index"].notna().any():
+        best_row = metrics_df.loc[metrics_df["fair_index"].idxmin()]
         best_label = str(best_row["target_label"])
-        best_gini = float(best_row["gini_time"])
+        best_gini = float(best_row["gini_time"]) if "gini_time" in metrics_df.columns and pd.notna(best_row.get("gini_time")) else None
+        best_mean = float(best_row["mean_time_min"]) if "mean_time_min" in metrics_df.columns and pd.notna(best_row.get("mean_time_min")) else None
 
         st.markdown(
             f"""
@@ -1013,7 +1023,8 @@ if metrics_df is not None and len(metrics_df) > 0:
                 font-weight: 800;
                 color: rgba(17,24,39,0.78);
             ">
-                Gini: <span style="color: rgba(17,24,39,0.95);">{best_gini:.4f}</span>
+                {f'<span style="color: rgba(17,24,39,0.95);">Gini: {best_gini:.4f}</span>' if best_gini is not None else ''}
+                {f'<span style="margin-left:10px; color: rgba(17,24,39,0.65);">Tempo medio: {best_mean:.1f} min</span>' if best_mean is not None else ''}
             </div>
             </div>
             """,
@@ -1039,12 +1050,13 @@ if metrics_df is not None and len(metrics_df) > 0:
         )
 
     # Tabella compatta
-    if "gini_time" in metrics_df.columns:
-        metrics_df_display = metrics_df.copy()[["target_label", "gini_time", "mean_time_min"]]
+    if "fair_index" in metrics_df.columns:
+        metrics_df_display = metrics_df.copy()[["target_label", "fair_index", "mean_time_min", "gini_time"]]
         metrics_df_display = metrics_df_display.rename(columns={
             "target_label": "Destinazione",
-            "gini_time": "Gini",
+            "fair_index": "Fair Index",
             "mean_time_min": "Tempo Medio (min)",
+            "gini_time": "Gini Time",
         })
     else:
         metrics_df_display = metrics_df.copy()
