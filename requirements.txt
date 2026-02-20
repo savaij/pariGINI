@@ -1,9 +1,10 @@
 streamlit 
 scipy
 pandas
-Matplotlib
+matplotlib
 numpy
 streamlit-searchbox
 geopandas
 networkx
 plotly
+fiona
