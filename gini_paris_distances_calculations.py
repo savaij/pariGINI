@@ -585,7 +585,6 @@ import numpy as np
 def gini_coefficient(values, normalize=True):
     """Gini per array di valori non-negativi.
     Se normalize=True, normalizza dividendo per il massimo possibile (n-1)/n.
-    Se square_x=True, usa x^2 (dopo clip a 0 e prima del calcolo).
     Ritorna NaN se input vuoto / somma <= 0 / n < 2 (in normalizzato).
 
     Nota: il bilanciamento con il tempo medio non viene piu applicato qui; la
@@ -620,19 +619,6 @@ def gini_coefficient(values, normalize=True):
     g_norm = float(np.clip(g_norm, 0.0, 1.0))
 
     return g_norm
-
-def theil_index(values):
-    """Theil T (indice entropico). Ritorna NaN se mean<=0 o input vuoto."""
-    x = np.asarray(values, dtype=float)
-    x = x[np.isfinite(x)]
-    if x.size == 0:
-        return np.nan
-    x = np.clip(x, 0, None)
-    mu = x.mean()
-    if mu <= 0:
-        return np.nan
-    x_pos = x[x > 0]
-    return float(np.mean((x_pos / mu) * np.log(x_pos / mu)))
 
 # =========================
 # BATCH: MANY STARTS -> ONE TARGET
@@ -737,7 +723,7 @@ def accessibility_inequality_to_target(
 
         rows.append(rec)
 
-        results_df = pd.DataFrame(rows)
+    results_df = pd.DataFrame(rows)
 
     valid_times = results_df.loc[results_df["ok"], "total_time_min"].to_numpy(dtype=float)
     valid_times = valid_times[np.isfinite(valid_times)]
@@ -755,8 +741,7 @@ def accessibility_inequality_to_target(
         "p90_time_min": float(np.percentile(valid_times, 90)) if valid_times.size else np.nan,
         "min_time_min": float(np.min(valid_times)) if valid_times.size else np.nan,
         "max_time_min": float(np.max(valid_times)) if valid_times.size else np.nan,
-        "gini_time": gini_norm,              # 0..1
-        "theil_time": theil_index(valid_times),
+        "gini_time": gini_norm              # 0..1
     }
 
     return results_df, metrics
@@ -783,7 +768,7 @@ def accessibility_inequality_to_targets(
     precomputed=None,
 ):
     """
-    Calcola le metriche (tempo medio, Gini, Theil, ecc.) da molti start verso molti target.
+    Calcola le metriche (tempo medio, Gini, ecc.) da molti start verso molti target.
 
     Output chiave per la mappa:
       - gini_time        : Gini normalizzato classico in [0,1]

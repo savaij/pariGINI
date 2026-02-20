@@ -36,8 +36,49 @@ from gini_paris_distances_calculations import (
     accessibility_inequality_to_targets,
 )
 
+
+# st.markdown("""
+#     <style>
+#     @import url("https://fonts.googleapis.com/css2?family=Archivo:ital,wght@0,100..900;1,100..900&family=Epilogue:ital,wght@0,100..900;1,100..900&family=Sora:wght@100..800&display=swap");
+
+#     html, body, [class*="st-"], button, input, textarea, p, h1, h2, h3, h4, h5, h6, label {
+#         font-family: "Archivo", sans-serif !important;
+#         font-optical-sizing: auto;
+#     }
+#     </style>
+# """, unsafe_allow_html=True)
+
+st.markdown("""
+    <style>
+    @import url("https://fonts.googleapis.com/css2?family=Archivo:ital,wdth,wght@0,90,100..900;1,90,100..900&display=swap");
+
+    html, body, [class*="st-"], button, input, textarea, p, label {
+        font-family: "Archivo", sans-serif !important;
+        font-optical-sizing: auto;
+    }
+
+    h1 {
+        font-family: "Archivo", sans-serif !important;
+        font-weight: 900 !important;
+        font-stretch: 20% !important;
+    }
+            
+    h2 {
+    font-size: 1.4rem !important;
+    font-family: "Archivo", sans-serif !important;
+    font-weight: 900 !important;
+    font-stretch: 20% !important;
+    }
+
+    h3, h4, h5, h6 {
+        font-family: "Archivo", sans-serif !important;
+    }
+    </style>
+""", unsafe_allow_html=True)
+
 # ============================================================
-# HELPERS
+# HELPERS pythonh1, h2 {
+
 # ============================================================
 WGS84_EPSG = 4326
 METRIC_EPSG = 2154
@@ -138,14 +179,14 @@ div.stButton > button:hover {
 
 div.stButton > button[kind="primary"],
 div.stButton > button[data-testid="baseButton-primary"] {
-  background: #e5e7eb !important;
-  color: #111827 !important;
-  border: 1px solid rgba(17,24,39,0.25) !important;
+  background: #F54927 !important;
+  color: #ffffff !important;
+  border: 1px solid #F54927 !important;
 }
 div.stButton > button[kind="primary"]:hover,
 div.stButton > button[data-testid="baseButton-primary"]:hover {
-  background: #d1d5db !important;
-  border-color: rgba(17,24,39,0.35) !important;
+  background: #d93d1f !important;
+  border-color: #d93d1f !important;
 }
 
 [data-testid="stMetricValue"] { color: #111827 !important; }
@@ -206,62 +247,15 @@ span[data-baseweb="tag"] {
   color: #111827 !important;
 }
 
-/* Decorazioni */
-.metro-decor {
-  position: fixed;
-  left: 10px;
-  top: 120px;
-  width: 18px;
-  z-index: 2;
-  opacity: 0.85;
-  pointer-events: none;
-}
-.metro-decor .pill {
-  width: 10px;
-  margin: 6px auto;
-  border-radius: 999px;
-  border: 1px solid rgba(17,24,39,0.18);
-}
-.metro-decor .pill.small { height: 10px; }
-.metro-decor .pill.med   { height: 16px; }
-.metro-decor .pill.long  { height: 24px; }
-@media (max-width: 768px) {
-  .metro-decor { display: none !important; }
-}
+
+
 </style>
 """,
     unsafe_allow_html=True,
 )
 st.markdown("<div style='height:6px'></div>", unsafe_allow_html=True)
 
-# ============================================================
-# DECORAZIONI
-# ============================================================
-def render_left_decor():
-    if "decor_colors" not in st.session_state:
-        keys = list(LINE_COLORS.keys())
-        chosen = random.sample(keys, k=2)
-        if random.random() < 0.45:
-            chosen.append(random.choice([k for k in keys if k not in chosen]))
 
-        sizes = ["small", "med", "small", "long", "small", "med"]
-        colors = []
-        for i in range(len(sizes)):
-            if i % 3 == 0:
-                colors.append(WALK_COLOR)
-            else:
-                colors.append(LINE_COLORS[chosen[i % len(chosen)]])
-        st.session_state.decor_colors = colors
-
-    colors = st.session_state.decor_colors
-    sizes = ["small", "med", "small", "long", "small", "med"]
-    pills = "\n".join(
-        [f"<div class='pill {sizes[i]}' style='background:{colors[i]}'></div>" for i in range(len(sizes))]
-    )
-    st.markdown(f"<div class='metro-decor'>{pills}</div>", unsafe_allow_html=True)
-
-
-render_left_decor()
 
 # ============================================================
 # API: Géoplateforme - Autocompletion (IGN)
@@ -605,45 +599,10 @@ def gini_to_green_red_hex(v01: float) -> str:
 # ============================================================
 # FAST HEX MAP PREP (cache)
 # ============================================================
-@st.cache_data(show_spinner=False)
 
-# def prepare_hex_geojson_fast(_hexes_gdf, _centers_gdf, scale_factor=1.0, simplify_m=12.0):
-#     """
-#     Prepara geometrie esagoni:
-#       - NON scala (scale_factor=1.0 di default, gli esagoni coprono già tutta la città)
-#       - Semplifica per performance
-#       - Converte in GeoJSON con 'id' come featureidkey
-#     """
-#     hex_w = _hexes_gdf.copy()
-
-#     # Assicura CRS WGS84
-#     if hex_w.crs is None or hex_w.crs.to_epsg() != WGS84_EPSG:
-#         hex_w = hex_w.to_crs(epsg=WGS84_EPSG)
-
-#     # Semplifica in metrico per preservare topologia, poi riconverti
-#     if simplify_m and simplify_m > 0:
-#         hex_m = hex_w.to_crs(epsg=METRIC_EPSG)
-#         hex_m["geometry"] = hex_m["geometry"].simplify(float(simplify_m), preserve_topology=True)
-#         hex_w = hex_m.to_crs(epsg=WGS84_EPSG)
-
-#     # Centro mappa
-#     centroid = hex_w.unary_union.centroid
-#     center = dict(lat=float(centroid.y), lon=float(centroid.x))
-
-#     # Assicura colonna 'id'
-#     if "id" not in hex_w.columns:
-#         hex_w = hex_w.copy()
-#         hex_w["id"] = np.arange(len(hex_w), dtype=int)
-
-#     # GeoJSON con id stringa come indice
-#     hex_w = hex_w.copy()
-#     hex_w["id_str"] = hex_w["id"].astype(str)
-#     geojson = json.loads(hex_w.set_index("id_str").to_json())
-
-#     return geojson, center
 
 @st.cache_data(show_spinner=False)
-def prepare_hex_geojson_fast(_hexes_gdf, simplify_m=12.0):
+def prepare_hex_geojson_fast(_hexes_gdf, simplify_m=2.0):
     hex_w = _hexes_gdf.copy().reset_index(drop=True)
 
     if hex_w.crs is None or hex_w.crs.to_epsg() != WGS84_EPSG:
@@ -666,134 +625,254 @@ def prepare_hex_geojson_fast(_hexes_gdf, simplify_m=12.0):
     return geojson, center
 
 
-def render_hexagon_map_fast(geojson, metrics_df):
-    """
-    Render molto veloce:
-      - 1 trace Choroplethmapbox
-      - colore continuo verde->rosso basato su FAIR INDEX:
-            fair_index = mean_time_min * (gini_time + 1)
-      - hover: "Gini: x.xxx, Tempo medio: yy min"
-    """
-    df = metrics_df.copy()
+def render_hexagon_map_fast(geojson, metrics_df, hexes_gdf):
+    from scipy.interpolate import RBFInterpolator
+    import io
+    import base64
+    from PIL import Image
+    import matplotlib.pyplot as plt
+    import matplotlib.colors as mcolors
 
-    # id per match con geojson features
+    df = metrics_df.copy()
     df["id_str"] = pd.to_numeric(df["target_id"], errors="coerce").astype("Int64").astype(str)
 
-    # --- Gini normale 0..1 ---
+    # --- Gini ---
     if "gini_time" in df.columns:
         gini = pd.to_numeric(df["gini_time"], errors="coerce")
     else:
         gini = pd.Series(np.nan, index=df.index)
-
     gini = gini.clip(lower=0.0, upper=1.0)
 
     # --- Tempo medio ---
     mean_time = pd.to_numeric(df.get("mean_time_min", np.nan), errors="coerce")
 
-    # --- Fair index (preferisci la colonna pre-calcolata) ---
+    # --- Fair index ---
     if "fair_index" in df.columns:
         fair = pd.to_numeric(df["fair_index"], errors="coerce")
     else:
         fair = mean_time * (gini + 1.0)
 
-    # --- Normalizzazione per la colorazione (0..1) ---
+    # --- Normalizzazione ---
     fair_valid = fair[np.isfinite(fair)]
     if fair_valid.empty:
-        z = pd.Series(np.nan, index=df.index)
-        zmin, zmax = 0.0, 1.0
+        z = pd.Series(0.5, index=df.index)
     else:
-        # robust scaling: percentili per evitare outlier
         lo = float(np.nanpercentile(fair_valid.to_numpy(dtype=float), 5))
         hi = float(np.nanpercentile(fair_valid.to_numpy(dtype=float), 95))
-
-        # fallback se distribuzione troppo "stretta"
         if not np.isfinite(lo) or not np.isfinite(hi) or hi <= lo:
             lo = float(np.nanmin(fair_valid.to_numpy(dtype=float)))
             hi = float(np.nanmax(fair_valid.to_numpy(dtype=float)))
-            if not np.isfinite(lo) or not np.isfinite(hi) or hi <= lo:
+            if hi <= lo:
                 lo, hi = 0.0, lo + 1.0
-
         z = (fair - lo) / (hi - lo)
         z = z.clip(lower=0.0, upper=1.0)
-        zmin, zmax = 0.0, 1.0
 
-    # --- hover text: "Arrondissement: xx, Gini: x.xxx, Tempo medio: yy min" ---
-    hover = []
-    arr = df.get("c_ar", pd.Series([None] * len(df)))
-    for ar, gg, mt in zip(arr, gini, mean_time):
-        if pd.isna(ar):
-            atxt = "Arrondissement: N/A"
-        else:
-            atxt = f"Arrondissement: {str(ar)}"
+    # --- Centroidi esagoni in WGS84 ---
+    hexes_w = hexes_gdf.copy().reset_index(drop=True)
+    if hexes_w.crs is None or hexes_w.crs.to_epsg() != WGS84_EPSG:
+        hexes_w = hexes_w.to_crs(epsg=WGS84_EPSG)
+    centroids = hexes_w.geometry.centroid
+    lons = centroids.x.values
+    lats = centroids.y.values
 
-        if pd.isna(gg):
-            gtxt = "Gini: N/A"
-        else:
-            gtxt = f"Gini: {float(gg):.3f}"
+    # Allinea z ai centroidi tramite target_id
+    z_vals = np.full(len(lons), np.nan)
+    for idx, row in df.iterrows():
+        tid = pd.to_numeric(row["target_id"], errors="coerce")
+        if np.isfinite(tid) and int(tid) < len(z_vals):
+            v = z.iloc[idx] if hasattr(z, 'iloc') else z[idx]
+            if np.isfinite(v):
+                z_vals[int(tid)] = float(v)
 
-        if pd.isna(mt):
-            mtxt = "Tempo medio: N/A"
-        else:
-            mtxt = f"Tempo medio: {fmt_min(mt)} min"
+   # Rimuovi NaN
+    valid_mask = np.isfinite(z_vals)
+    lons_v = lons[valid_mask]
+    lats_v = lats[valid_mask]
+    z_v = z_vals[valid_mask]
 
-        # mostra arrondissement, Gini e tempo medio (nessun indirizzo/label)
-        hover.append(f"{atxt} <br> {gtxt}, {mtxt}")
+    # --- Hover allineato ai punti validi ---
+    arr_col = df.get("c_ar", pd.Series([None] * len(df)))
+    hover_all = []
+    for ar, gg, mt in zip(arr_col, gini, mean_time):
+        atxt = f"Arrondissement: {str(ar)}" if not pd.isna(ar) else "Arrondissement: N/A"
+        gtxt = f"Gini: {float(gg):.3f}" if not pd.isna(gg) else "Gini: N/A"
+        mtxt = f"Tempo medio: {fmt_min(mt)} min" if not pd.isna(mt) else "Tempo medio: N/A"
+        hover_all.append(f"{atxt}<br>{gtxt}, {mtxt}")
+    hover_valid = [hover_all[i] for i in range(len(z_vals)) if valid_mask[i]]
 
-   
+    # --- Interpolazione RBF su griglia regolare ---
+    # Bounds geografici
+    lon_min, lon_max = lons_v.min() - 0.01, lons_v.max() + 0.01
+    lat_min, lat_max = lats_v.min() - 0.01, lats_v.max() + 0.01
 
-    # Scala cromatica a 5 punti (suddivisione uniforme 0.25)
-    # colorscale = [
-    # [0.0, '#059669'],   # Verde Smeraldo (Ottimo)
-    # [0.25, '#93a750'],  # Verde Oliva (Buono)
-    # [0.5, '#cb9e39'],   # Ocra/Giallo sporco (Neutro/Warning)
-    # [0.75, '#e2792a'],  # Arancio (Critico)
-    # [1.0, '#dc2626']    # Rosso (Allarme)
-    # ] #059669,#a8ba31,#f0951b,#dc2626
+    grid_res = 500  # risoluzione immagine in pixel
+    grid_lon = np.linspace(lon_min, lon_max, grid_res)
+    grid_lat = np.linspace(lat_min, lat_max, grid_res)
+    glon, glat = np.meshgrid(grid_lon, grid_lat)
 
-    colorscale = [
-    [0.0, '#059669'],   # Verde Smeraldo (Ottimo)
-    [0.25, '#93a750'],  # Verde Oliva (Buono)
-    [0.5, '#e2792a'],  # Arancio (Critico)
-    [1.0, '#dc2626']    # Rosso (Allarme)
-    ]
+    # RBF interpolation
+    points = np.column_stack([lons_v, lats_v])
+    grid_points = np.column_stack([glon.ravel(), glat.ravel()])
+    rbf = RBFInterpolator(points, z_v, kernel='linear', smoothing=0.01)
+    grid_z = rbf(grid_points).reshape(grid_res, grid_res)
+    grid_z = np.clip(grid_z, 0.0, 1.0)
+    # Flip verticale perché le immagini hanno y invertito
+    grid_z = np.flipud(grid_z)
 
-
-    fig = go.Figure(
-        go.Choroplethmap(
-            geojson=geojson,
-            # IMPORTANTISSIMO:
-            # se nel tuo geojson feature['id'] è stringa, featureidkey="id" va bene.
-            # altrimenti (più comune) è feature['properties']['id'] e allora usare featureidkey="properties.id"
-            featureidkey="id",
-            locations=df["id_str"],
-            z=z,
-            colorscale=colorscale,
-            zmin=zmin,
-            zmax=zmax,
-            marker=dict(
-                line=dict(width=0, color="rgba(0,0,0,0)"),
-                opacity=0.40,
-            ),
-            hovertext=hover,
-            hoverinfo="text",
-            showscale=False,
-        )
+    # --- Colormap verde -> rosso ---
+    cmap = mcolors.LinearSegmentedColormap.from_list(
+        "gini_cmap",
+        ["#059669", "#93a750", "#e2792a", "#dc2626"]
     )
+
+    # --- Alpha: fadeout ai bordi usando distanza dai punti dati ---
+    # calcola distanza minima da ogni pixel al punto dati più vicino
+    from scipy.spatial import cKDTree
+    tree = cKDTree(np.column_stack([lons_v, lats_v]))
+    dist, _ = tree.query(grid_points, k=1)
+    dist_grid = dist.reshape(grid_res, grid_res)
+    dist_grid = np.flipud(dist_grid)
+    # normalizza e inverti: vicino ai dati = opaco, lontano = trasparente
+    fade_radius = 0.04  # gradi, regola questo per più/meno fadeout
+    alpha = np.clip(1.0 - dist_grid / fade_radius, 0.0, 1.0)
+    alpha = (alpha ** 0.5) * 0.75  # gamma + opacità massima
+
+    # --- Costruisci immagine RGBA ---
+    rgba = cmap(grid_z)  # shape (H, W, 4)
+    rgba[:, :, 3] = alpha
+    img_array = (rgba * 255).astype(np.uint8)
+    
+
+    # --- Maschera con shape di Parigi ---
+    import fiona
+    from shapely.geometry import shape
+    from shapely.ops import unary_union
+    from PIL import ImageDraw
+
+    # Carica arrondissement e unisci in un unico poligono
+    arr_gdf = gpd.read_file("./paris_senza_fiume.geojson")
+    if arr_gdf.crs is None or arr_gdf.crs.to_epsg() != WGS84_EPSG:
+        arr_gdf = arr_gdf.to_crs(epsg=WGS84_EPSG)
+    paris_shape = unary_union(arr_gdf.geometry)
+
+    # Converti coordinate geografiche -> pixel nell'immagine
+    def geo_to_pixel(lon, lat):
+        px = int((lon - lon_min) / (lon_max - lon_min) * grid_res)
+        py = int((lat_max - lat) / (lat_max - lat_min) * grid_res)
+        return (px, py)
+
+    # Crea maschera binaria della forma di Parigi
+    mask_img = Image.new("L", (grid_res, grid_res), 0)
+    draw = ImageDraw.Draw(mask_img)
+
+    geoms = paris_shape.geoms if hasattr(paris_shape, 'geoms') else [paris_shape]
+    for geom in geoms:
+        exterior_pixels = [geo_to_pixel(lon, lat) for lon, lat in geom.exterior.coords]
+        draw.polygon(exterior_pixels, fill=255)
+
+    mask_array = np.array(mask_img) / 255.0
+
+    # Applica la maschera all'alpha: fuori da Parigi -> trasparente
+    img_array[:, :, 3] = (img_array[:, :, 3] / 255.0 * mask_array * 255).astype(np.uint8)
+
+    img = Image.fromarray(img_array, mode="RGBA")
+
+    # Encode in base64
+    buf = io.BytesIO()
+    img.save(buf, format="PNG")
+    img_b64 = base64.b64encode(buf.getvalue()).decode()
+    img_src = f"data:image/png;base64,{img_b64}"
+
+    # --- Figura Plotly: mappa base + immagine sovrapposta ---
+
+    centroid_union = hexes_w.geometry.union_all().centroid
+    center = dict(lat=float(centroid_union.y), lon=float(centroid_union.x))
+
+    fig = go.Figure(go.Scattermap(
+        lat=lats_v.tolist(),
+        lon=lons_v.tolist(),
+        mode="markers",
+        marker=dict(size=8, opacity=0),
+        text=hover_valid,
+        hoverinfo="text",
+        showlegend=False,
+    ))
 
     fig.update_layout(
         margin=dict(l=0, r=0, t=40, b=0),
-        map=dict(style="carto-positron", zoom=11),
+        map=dict(
+            style="carto-positron",
+            zoom=11,
+            center=center,
+            layers=[{
+                "sourcetype": "image",
+                "source": img_src,
+                "coordinates": [
+                    [lon_min, lat_max],
+                    [lon_max, lat_max],
+                    [lon_max, lat_min],
+                    [lon_min, lat_min],
+                ],
+                "opacity": 0.60,
+                "below": "",
+            }]
+        ),
         height=620,
     )
 
-    return fig
+    # --- Carica arrondissement con confini precisi ---
+    arr_noparks = gpd.read_file("./arrondissement_noparks.geojson")
+    if arr_noparks.crs is None or arr_noparks.crs.to_epsg() != WGS84_EPSG:
+        arr_noparks = arr_noparks.to_crs(epsg=WGS84_EPSG)
+
+    # Costruisci un trace Scattermap per ogni arrondissement (poligono + hover)
+    for _, arr_row in arr_noparks.iterrows():
+        geom = arr_row.geometry
+        nom = arr_row.get("l_ar", "")
+        c_ar = arr_row.get("c_ar", "")
+
+        # Estrai coordinate del poligono (gestisci MultiPolygon)
+        polys = geom.geoms if hasattr(geom, 'geoms') else [geom]
+        for poly in polys:
+            lons_poly, lats_poly = zip(*[(c[0], c[1]) for c in poly.exterior.coords])
+            fig.add_trace(go.Scattermap(
+                lat=list(lats_poly),
+                lon=list(lons_poly),
+                mode="lines",
+                line=dict(width=1.5, color="rgba(17,24,39,0.35)"),
+                fill="toself",
+                fillcolor="rgba(0,0,0,0)",
+                # hovertext=f"{nom} ({c_ar}ème)",
+                hoverinfo="skip",
+                showlegend=False,
+            ))
+
+    return fig, center
+
 
 
 
 # ============================================================
 # HEADER
 # ============================================================
-st.markdown("<div class='pg-title'>pariGINI</div>", unsafe_allow_html=True)
+
+st.markdown("""
+    <span class="parigini-title" style="font-size: 2.5rem;">
+        pari<span class="gini-red">GINI</span>
+    </span>
+    <style>
+    .parigini-title {
+        font-family: 'Archivo', sans-serif;
+        font-weight: 900;
+        font-stretch: 60%;
+    }
+    .gini-red {
+        color: #F54927 !important;
+    }
+    </style>
+""", unsafe_allow_html=True)
+
+# st.markdown("<div class='pg-title'>pariGINI</div>", unsafe_allow_html=True)
 st.markdown(
     """
 I tuoi amici ti propongono un bar troppo lontano? Calcola quanto è equa la scelta.  
@@ -901,8 +980,8 @@ for i in range(st.session_state.n_friends):
             starts.append(coords)
 
 ready = len(starts) >= 2
-if not ready:
-    st.warning(f"Manca: almeno 2 amici (con indirizzo selezionato). Attualmente: {len(starts)}.")
+# if not ready:
+#     st.warning(f"Manca: almeno 2 amici (con indirizzo selezionato). Attualmente: {len(starts)}.")
 
 # ============================================================
 # ANALYSIS & RESULTS
@@ -955,15 +1034,21 @@ if st.button("Calcola Gini", type="primary", use_container_width=True, disabled=
     # ===========================
     # MAPPA (FAST)
     # ===========================
-    st.subheader("Mappa di equità - Gini Index per zona")
+    st.header("Mappa di equità - Gini Index per zona")
 
-    fig_map = render_hexagon_map_fast(
+    # fig_map = render_hexagon_map_fast(
+    #     geojson=geojson_hex,
+    #     metrics_df=metrics_df,
+    # )
+
+    fig_map, map_center = render_hexagon_map_fast(
         geojson=geojson_hex,
         metrics_df=metrics_df,
+        hexes_gdf=hexes_gdf,
     )
-    # centra mappa
-    fig_map.update_layout(map=dict(center=map_center, style="carto-positron", zoom=11))
+    fig_map.update_layout(map=dict(center=map_center, zoom=12))
     st.plotly_chart(fig_map, use_container_width=True)
+
 
     st.info(
     """
@@ -995,51 +1080,6 @@ In hover vedi: **Gini (0..1), Tempo medio (min)**.
     else:
         st.info("Gini non disponibile (nessuna zona valida).")
 
-
-    # ===========================
-    # EXPORT
-    # ===========================
-    with st.expander("Esporta risultati", expanded=False):
-        col1, col2 = st.columns(2)
-
-        with col1:
-            csv = metrics_df.to_csv(index=False)
-            st.download_button(
-                label="Scarica CSV (metriche zone)",
-                data=csv,
-                file_name="metro_accessibility_heatmap.csv",
-                mime="text/csv",
-            )
-
-        with col2:
-            summary = {
-                "mean_gini_norm": float(gini_norm.mean()) if not gini_norm.empty else None,
-                "min_gini_norm": float(gini_norm.min()) if not gini_norm.empty else None,
-                "max_gini_norm": float(gini_norm.max()) if not gini_norm.empty else None,
-                "n_valid_zones": int(len(gini_norm)),
-                "n_total_zones": int(len(metrics_df)),
-                "n_starts": int(len(starts)),
-                "routing": {
-                    "max_line_changes": max_line_changes,
-                    "change_penalty_min": change_penalty_min,
-                    "max_walk_min_start": 15.0,
-                    "max_walk_min_end": 15.0,
-                    "max_candidate_stations": 25,
-                    "allow_walk_only": True,
-                },
-                "map_render": {
-                    "renderer": "plotly choroplethmapbox (single trace)",
-                    "scale_factor_hex": 2.0,
-                    "simplify_m": 12.0,
-                },
-            }
-            json_data = json.dumps(summary, indent=2)
-            st.download_button(
-                label="Scarica JSON (sintesi)",
-                data=json_data,
-                file_name="metro_accessibility_summary.json",
-                mime="application/json",
-            )
 
 # ============================================================
 # FOOTER
