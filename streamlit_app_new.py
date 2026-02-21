@@ -667,6 +667,9 @@ def render_hexagon_map_fast(geojson, metrics_df, hexes_gdf):
         z = (fair - lo) / (hi - lo)
         z = z.clip(lower=0.0, upper=1.0)
 
+        GAMMA = 3.5  
+        z = 1.0 - (1.0 - z) ** GAMMA
+
     # --- Centroidi esagoni in WGS84 ---
     hexes_w = hexes_gdf.copy().reset_index(drop=True)
     if hexes_w.crs is None or hexes_w.crs.to_epsg() != WGS84_EPSG:
@@ -700,7 +703,17 @@ def render_hexagon_map_fast(geojson, metrics_df, hexes_gdf):
         hover_all.append(f"{atxt}<br>{gtxt}, {mtxt}")
     hover_valid = [hover_all[i] for i in range(len(z_vals)) if valid_mask[i]]
 
-    # --- Interpolazione RBF su griglia regolare ---
+    # --- Maschera di Parigi: calcolata PRIMA dell'interpolazione ---
+    from shapely.ops import unary_union
+    from shapely.prepared import prep
+    from PIL import ImageDraw
+
+    arr_gdf = gpd.read_file("./paris_senza_fiume.geojson")
+    if arr_gdf.crs is None or arr_gdf.crs.to_epsg() != WGS84_EPSG:
+        arr_gdf = arr_gdf.to_crs(epsg=WGS84_EPSG)
+    paris_shape = unary_union(arr_gdf.geometry)
+
+    # --- Interpolazione RBF solo sui pixel interni a Parigi ---
     # Bounds geografici
     lon_min, lon_max = lons_v.min() - 0.01, lons_v.max() + 0.01
     lat_min, lat_max = lats_v.min() - 0.01, lats_v.max() + 0.01
@@ -710,12 +723,40 @@ def render_hexagon_map_fast(geojson, metrics_df, hexes_gdf):
     grid_lat = np.linspace(lat_min, lat_max, grid_res)
     glon, glat = np.meshgrid(grid_lon, grid_lat)
 
-    # RBF interpolation
+    # Maschera raster: rasterizza il poligono di Parigi sulla griglia pixel
+    def geo_to_pixel(lon, lat):
+        px = int((lon - lon_min) / (lon_max - lon_min) * grid_res)
+        py = int((lat_max - lat) / (lat_max - lat_min) * grid_res)
+        return (px, py)
+
+    mask_img = Image.new("L", (grid_res, grid_res), 0)
+    draw = ImageDraw.Draw(mask_img)
+    geoms = paris_shape.geoms if hasattr(paris_shape, 'geoms') else [paris_shape]
+    for geom in geoms:
+        exterior_pixels = [geo_to_pixel(lon, lat) for lon, lat in geom.exterior.coords]
+        draw.polygon(exterior_pixels, fill=255)
+    mask_array = np.array(mask_img) / 255.0  # shape (grid_res, grid_res), 1.0 dentro Parigi
+
+    # Individua indici pixel dentro Parigi (sulla griglia non-flippata)
+    # mask_array ha riga 0 = lat_max (come immagine), glon/glat: riga 0 = lat_min
+    # Quindi flippiamo mask_array per allinearla alla griglia meshgrid
+    mask_grid = np.flipud(mask_array)  # ora riga 0 = lat_min, come meshgrid
+    inside_flat = mask_grid.ravel() > 0.5
+    n_inside = int(inside_flat.sum())
+
+    all_grid_points = np.column_stack([glon.ravel(), glat.ravel()])
+    inside_points = all_grid_points[inside_flat]  # solo pixel dentro Parigi
+
+    # RBF interpolation solo sui punti interni
     points = np.column_stack([lons_v, lats_v])
-    grid_points = np.column_stack([glon.ravel(), glat.ravel()])
     rbf = RBFInterpolator(points, z_v, kernel='linear', smoothing=0.01)
-    grid_z = rbf(grid_points).reshape(grid_res, grid_res)
-    grid_z = np.clip(grid_z, 0.0, 1.0)
+    inside_z = rbf(inside_points)
+    inside_z = np.clip(inside_z, 0.0, 1.0)
+
+    # Ricostruisci griglia completa (NaN fuori)
+    grid_z_flat = np.full(grid_res * grid_res, np.nan)
+    grid_z_flat[inside_flat] = inside_z
+    grid_z = grid_z_flat.reshape(grid_res, grid_res)
     # Flip verticale perché le immagini hanno y invertito
     grid_z = np.flipud(grid_z)
 
@@ -725,55 +766,27 @@ def render_hexagon_map_fast(geojson, metrics_df, hexes_gdf):
         ["#059669", "#93a750", "#e2792a", "#dc2626"]
     )
 
-    # --- Alpha: fadeout ai bordi usando distanza dai punti dati ---
-    # calcola distanza minima da ogni pixel al punto dati più vicino
+    # --- Alpha: fadeout ai bordi usando distanza dai punti dati (solo dentro Parigi) ---
     from scipy.spatial import cKDTree
     tree = cKDTree(np.column_stack([lons_v, lats_v]))
-    dist, _ = tree.query(grid_points, k=1)
-    dist_grid = dist.reshape(grid_res, grid_res)
+    inside_dist, _ = tree.query(inside_points, k=1)
+
+    dist_flat = np.full(grid_res * grid_res, np.inf)
+    dist_flat[inside_flat] = inside_dist
+    dist_grid = dist_flat.reshape(grid_res, grid_res)
     dist_grid = np.flipud(dist_grid)
-    # normalizza e inverti: vicino ai dati = opaco, lontano = trasparente
-    fade_radius = 0.04  # gradi, regola questo per più/meno fadeout
+
+    fade_radius = 0.04
     alpha = np.clip(1.0 - dist_grid / fade_radius, 0.0, 1.0)
-    alpha = (alpha ** 0.5) * 0.75  # gamma + opacità massima
+    alpha = (alpha ** 0.5) * 0.75
 
     # --- Costruisci immagine RGBA ---
-    rgba = cmap(grid_z)  # shape (H, W, 4)
-    rgba[:, :, 3] = alpha
+    # Per i pixel fuori Parigi, grid_z è NaN: cmap li rende trasparenti,
+    # ma forziamo alpha=0 esplicitamente
+    grid_z_safe = np.where(np.isfinite(grid_z), grid_z, 0.0)
+    rgba = cmap(grid_z_safe)  # shape (H, W, 4)
+    rgba[:, :, 3] = alpha * mask_array  # mask_array già orientata come immagine
     img_array = (rgba * 255).astype(np.uint8)
-    
-
-    # --- Maschera con shape di Parigi ---
-    import fiona
-    from shapely.geometry import shape
-    from shapely.ops import unary_union
-    from PIL import ImageDraw
-
-    # Carica arrondissement e unisci in un unico poligono
-    arr_gdf = gpd.read_file("./paris_senza_fiume.geojson")
-    if arr_gdf.crs is None or arr_gdf.crs.to_epsg() != WGS84_EPSG:
-        arr_gdf = arr_gdf.to_crs(epsg=WGS84_EPSG)
-    paris_shape = unary_union(arr_gdf.geometry)
-
-    # Converti coordinate geografiche -> pixel nell'immagine
-    def geo_to_pixel(lon, lat):
-        px = int((lon - lon_min) / (lon_max - lon_min) * grid_res)
-        py = int((lat_max - lat) / (lat_max - lat_min) * grid_res)
-        return (px, py)
-
-    # Crea maschera binaria della forma di Parigi
-    mask_img = Image.new("L", (grid_res, grid_res), 0)
-    draw = ImageDraw.Draw(mask_img)
-
-    geoms = paris_shape.geoms if hasattr(paris_shape, 'geoms') else [paris_shape]
-    for geom in geoms:
-        exterior_pixels = [geo_to_pixel(lon, lat) for lon, lat in geom.exterior.coords]
-        draw.polygon(exterior_pixels, fill=255)
-
-    mask_array = np.array(mask_img) / 255.0
-
-    # Applica la maschera all'alpha: fuori da Parigi -> trasparente
-    img_array[:, :, 3] = (img_array[:, :, 3] / 255.0 * mask_array * 255).astype(np.uint8)
 
     img = Image.fromarray(img_array, mode="RGBA")
 
