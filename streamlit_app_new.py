@@ -695,12 +695,14 @@ def render_hexagon_map_fast(geojson, metrics_df, hexes_gdf):
 
     # --- Hover allineato ai punti validi ---
     arr_col = df.get("c_ar", pd.Series([None] * len(df)))
+    nn_col = df.get("nearest_node", pd.Series([None] * len(df)))
     hover_all = []
-    for ar, gg, mt in zip(arr_col, gini, mean_time):
+    for ar, gg, mt, nn in zip(arr_col, gini, mean_time, nn_col):
         atxt = f"Arrondissement: {str(ar)}" if not pd.isna(ar) else "Arrondissement: N/A"
         gtxt = f"Gini: {float(gg):.3f}" if not pd.isna(gg) else "Gini: N/A"
         mtxt = f"Tempo medio: {fmt_min(mt)} min" if not pd.isna(mt) else "Tempo medio: N/A"
-        hover_all.append(f"{atxt}<br>{gtxt}, {mtxt}")
+        nntxt = f"Fermata: {str(nn)}" if not pd.isna(nn) else "Fermata: N/A"
+        hover_all.append(f"{atxt}<br>{gtxt}, {mtxt}<br>{nntxt}")
     hover_valid = [hover_all[i] for i in range(len(z_vals)) if valid_mask[i]]
 
     # --- Maschera di Parigi: calcolata PRIMA dell'interpolazione ---
@@ -906,7 +908,7 @@ def load_graph():
 
 @st.cache_data(show_spinner=False)
 def load_hexagon_data():
-    hexes_gdf = gpd.read_file("./esagoni_parigi_simplified.geojson")
+    hexes_gdf = gpd.read_file("./esagoni_parigi_simplified_name.geojson")
     return hexes_gdf
 
 
@@ -1034,15 +1036,91 @@ if st.button("Calcola Gini", type="primary", use_container_width=True, disabled=
                 precomputed=precomputed,     # O dati precomputati (veloce) O None (Dijkstra)
             )
 
-            # Aggiungi c_ar dagli esagoni (mappa id target -> arrondissement)
-            if "c_ar" in hexes_gdf.columns and "target_id" in metrics_df.columns:
-                hexes_ar = hexes_gdf.reset_index(drop=True)["c_ar"]
-                ar_map = pd.Series(hexes_ar.values, index=np.arange(len(hexes_ar))).to_dict()
+            # Aggiungi c_ar e nearest_node dagli esagoni (mappa id target -> colonna)
+            if "target_id" in metrics_df.columns:
                 metrics_df = metrics_df.copy()
-                metrics_df["c_ar"] = metrics_df["target_id"].map(ar_map)
+                if "c_ar" in hexes_gdf.columns:
+                    hexes_ar = hexes_gdf.reset_index(drop=True)["c_ar"]
+                    ar_map = pd.Series(hexes_ar.values, index=np.arange(len(hexes_ar))).to_dict()
+                    metrics_df["c_ar"] = metrics_df["target_id"].map(ar_map)
+                if "nearest_node" in hexes_gdf.columns:
+                    hexes_nn = hexes_gdf.reset_index(drop=True)["nearest_node"]
+                    nn_map = pd.Series(hexes_nn.values, index=np.arange(len(hexes_nn))).to_dict()
+                    metrics_df["nearest_node"] = metrics_df["target_id"].map(nn_map)
         except Exception as e:
             st.error(f"Errore nel calcolo: {e}")
             st.stop()
+
+    # ===========================
+    # TOP 3 FERMATE (fair_index più basso)
+    # ===========================
+    def _get_station_lines(graph, station_name):
+        """Restituisce le linee metro che passano per una fermata."""
+        if station_name not in graph:
+            return []
+        lines = set()
+        for _, _, data in graph.edges(station_name, data=True):
+            l = data.get("line")
+            if l is not None:
+                lines.add(str(l).strip())
+        return sorted(lines, key=lambda x: (0, float(x.replace("bis", ".5"))) if x.replace("bis", ".5").replace(".", "").isdigit() else (1, x))
+
+    # Calcola fair_index per ogni target
+    _gini_col = pd.to_numeric(metrics_df.get("gini_time"), errors="coerce")
+    _mean_col = pd.to_numeric(metrics_df.get("mean_time_min"), errors="coerce")
+    if "fair_index" in metrics_df.columns:
+        _fair_col = pd.to_numeric(metrics_df["fair_index"], errors="coerce")
+    else:
+        _fair_col = _mean_col * (_gini_col + 1.0)
+
+    _top_df = metrics_df.copy()
+    _top_df["_fair"] = _fair_col
+    _top_df = _top_df.dropna(subset=["_fair", "nearest_node"])
+    _top_df = _top_df.sort_values("_fair").head(3).reset_index(drop=True)
+
+    if not _top_df.empty:
+        st.header("Ecco le prime tre fermate vicino alle quali potete uscire")
+
+        cols = st.columns(len(_top_df))
+        for idx, (_, row) in enumerate(_top_df.iterrows()):
+            station = str(row["nearest_node"])
+            fair_val = float(row["_fair"])
+            gini_val = row.get("gini_time")
+            mean_val = row.get("mean_time_min")
+            lines = _get_station_lines(G, station)
+
+            with cols[idx]:
+                # Pillole colorate per le linee metro
+                line_pills = ""
+                if lines:
+                    pills = []
+                    for l in lines:
+                        lk = _norm_line_for_color(l)
+                        color = LINE_COLORS.get(lk, "#666")
+                        pills.append(
+                            f'<span style="display:inline-block;background:{color};color:#fff;'
+                            f'font-weight:700;font-size:0.8rem;padding:2px 8px;border-radius:999px;'
+                            f'margin:0 3px 3px 0;line-height:1.4;">{l}</span>'
+                        )
+                    line_pills = "".join(pills)
+
+                gini_str = f"{float(gini_val):.3f}" if pd.notna(gini_val) else "N/A"
+                mean_str = fmt_min(mean_val) if pd.notna(mean_val) else "N/A"
+
+                st.markdown(
+                    f"""
+<div style="background:#f9fafb;border:1px solid rgba(17,24,39,0.12);border-radius:14px;padding:18px 16px 14px 16px;">
+  <div style="font-size:1.25rem;font-weight:800;margin-bottom:6px;">{idx+1}. {station}</div>
+  <div style="margin-bottom:8px;">{line_pills}</div>
+  <div style="font-size:0.88rem;color:rgba(17,24,39,0.7);">
+    Tempo medio: <b>{mean_str} min</b> · Gini: <b>{gini_str}</b>
+  </div>
+</div>
+""",
+                    unsafe_allow_html=True,
+                )
+
+        st.markdown("<div style='height:12px'></div>", unsafe_allow_html=True)
 
     # ===========================
     # MAPPA (FAST)
