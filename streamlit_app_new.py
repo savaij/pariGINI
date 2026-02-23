@@ -73,6 +73,12 @@ st.markdown("""
     h3, h4, h5, h6 {
         font-family: "Archivo", sans-serif !important;
     }
+            
+    div.stButton > button[data-testid="baseButton-primary"] {
+    font-size: 1.4rem !important;
+    font-weight: 900 !important;
+    padding: 0.6rem 1.2rem !important;
+    }       
     </style>
 """, unsafe_allow_html=True)
 
@@ -107,7 +113,13 @@ def _hex_to_rgba(h, a):
     b = int(h[4:6], 16)
     return f"rgba({r},{g},{b},{a})"
 
-
+@st.cache_data(show_spinner=False)
+def load_metro_lines():
+    gdf = gpd.read_file("./metro_lignes_merged.geojson")
+    if gdf.crs is None or gdf.crs.to_epsg() != WGS84_EPSG:
+        gdf = gdf.to_crs(epsg=WGS84_EPSG)
+    gdf["indice_lig"] = gdf["indice_lig"].astype(str).str.strip()
+    return gdf
 # ============================================================
 # PAGE CONFIG
 # ============================================================
@@ -862,6 +874,38 @@ def render_hexagon_map_fast(geojson, metrics_df, hexes_gdf):
                 showlegend=False,
             ))
 
+    
+    # --- Linee metro ---
+    metro_lines_gdf = load_metro_lines()
+
+    def _geom_to_lonlat(geom):
+        lons, lats = [], []
+        if geom is None or geom.is_empty:
+            return lons, lats
+        parts = geom.geoms if geom.geom_type == "MultiLineString" else [geom]
+        for part in parts:
+            xs, ys = part.xy
+            lons.extend(xs); lons.append(None)
+            lats.extend(ys); lats.append(None)
+        return lons, lats
+
+    for _, line_row in metro_lines_gdf.iterrows():
+        ln = str(line_row["indice_lig"]).strip()
+        lk = _norm_line_for_color(ln)
+        color = LINE_COLORS.get(lk, "#888888")
+        lons_l, lats_l = _geom_to_lonlat(line_row.geometry)
+        if not lons_l:
+            continue
+        fig.add_trace(go.Scattermap(
+            lat=lats_l,
+            lon=lons_l,
+            mode="lines",
+            line=dict(width=2.5, color=color),
+            name=f"M{ln}",
+            hoverinfo="name",
+            showlegend=False,
+        ))
+
     return fig, center
 
 
@@ -1052,7 +1096,7 @@ if st.button("Calcola Gini", type="primary", use_container_width=True, disabled=
             st.stop()
 
     # ===========================
-    # TOP 3 FERMATE (fair_index più basso)
+    # TOP 3 FERMATE (fair_index più basso + snodi)
     # ===========================
     def _get_station_lines(graph, station_name):
         """Restituisce le linee metro che passano per una fermata."""
@@ -1076,21 +1120,70 @@ if st.button("Calcola Gini", type="primary", use_container_width=True, disabled=
     _top_df = metrics_df.copy()
     _top_df["_fair"] = _fair_col
     _top_df = _top_df.dropna(subset=["_fair", "nearest_node"])
-    _top_df = _top_df.sort_values("_fair").head(3).reset_index(drop=True)
 
-    if not _top_df.empty:
+    # --- NUOVA LOGICA: top 5 esagoni, TUTTE le fermate vicine, top 3 per linee ---
+    _top5 = _top_df.sort_values("_fair").head(5).copy()
+
+    hexes_metric = hexes_gdf.copy().to_crs(epsg=METRIC_EPSG)
+    RADIUS_M = 400
+
+    # Costruisci GeoDataFrame dei nodi metro dal grafo
+    # Costruisci GeoDataFrame dei nodi metro dal grafo
+    _metro_nodes = {}
+    for node, data in G.nodes(data=True):
+        coords = data.get("coordinates")
+        if coords is not None and len(coords) == 2:
+            _metro_nodes[node] = (float(coords[0]), float(coords[1]))  # (lon, lat)
+    
+ 
+    _nodes_gdf = gpd.GeoDataFrame(
+        {"station": list(_metro_nodes.keys())},
+        geometry=[Point(lon, lat) for lon, lat in _metro_nodes.values()],
+        crs=f"EPSG:{WGS84_EPSG}",
+    ).to_crs(epsg=METRIC_EPSG)
+
+    _station_rows = {}
+    for _, row in _top5.iterrows():
+        tid = int(row["target_id"])
+        if tid >= len(hexes_metric):
+            continue
+        centroid = hexes_metric.geometry.iloc[tid].centroid
+        fair_val = row["_fair"]
+
+        for idx_n, node_row in _nodes_gdf.iterrows():
+            dist = centroid.distance(node_row.geometry)
+            if dist <= RADIUS_M:
+                s = node_row["station"]
+                if s not in _station_rows or fair_val < _station_rows[s]["_fair"]:
+                    _station_rows[s] = row
+
+    _station_list = []
+    for station, row in _station_rows.items():
+        lines = _get_station_lines(G, station)
+        if len(lines) == 0:
+            continue
+        _station_list.append({
+            "station": station,
+            "n_lines": len(lines),
+            "lines": lines,
+            "row": row,
+        })
+
+    _station_list.sort(key=lambda x: (-x["n_lines"], x["row"]["_fair"]))
+    _top3_stations = _station_list[:3]
+
+    if _top3_stations:
         st.header("Ecco le prime tre fermate vicino alle quali potete uscire")
 
-        cols = st.columns(len(_top_df))
-        for idx, (_, row) in enumerate(_top_df.iterrows()):
-            station = str(row["nearest_node"])
-            fair_val = float(row["_fair"])
+        cols = st.columns(len(_top3_stations))
+        for idx, entry in enumerate(_top3_stations):
+            station = entry["station"]
+            row = entry["row"]
+            lines = entry["lines"]
             gini_val = row.get("gini_time")
             mean_val = row.get("mean_time_min")
-            lines = _get_station_lines(G, station)
 
             with cols[idx]:
-                # Pillole colorate per le linee metro
                 line_pills = ""
                 if lines:
                     pills = []
@@ -1108,12 +1201,12 @@ if st.button("Calcola Gini", type="primary", use_container_width=True, disabled=
                 mean_str = fmt_min(mean_val) if pd.notna(mean_val) else "N/A"
 
                 st.markdown(
-                    f"""
+f"""
 <div style="background:#f9fafb;border:1px solid rgba(17,24,39,0.12);border-radius:14px;padding:18px 16px 14px 16px;">
   <div style="font-size:1.25rem;font-weight:800;margin-bottom:6px;">{idx+1}. {station}</div>
   <div style="margin-bottom:8px;">{line_pills}</div>
   <div style="font-size:0.88rem;color:rgba(17,24,39,0.7);">
-    Tempo medio: <b>{mean_str} min</b> · Gini: <b>{gini_str}</b>
+    Tempo medio: <b>{mean_str} min</b> · Gini: <b>{gini_str}</b> · Linee: <b>{entry['n_lines']}</b>
   </div>
 </div>
 """,
@@ -1121,7 +1214,6 @@ if st.button("Calcola Gini", type="primary", use_container_width=True, disabled=
                 )
 
         st.markdown("<div style='height:12px'></div>", unsafe_allow_html=True)
-
     # ===========================
     # MAPPA (FAST)
     # ===========================
@@ -1137,7 +1229,7 @@ if st.button("Calcola Gini", type="primary", use_container_width=True, disabled=
         metrics_df=metrics_df,
         hexes_gdf=hexes_gdf,
     )
-    fig_map.update_layout(map=dict(center=map_center, zoom=12))
+    fig_map.update_layout(map=dict(center=map_center, zoom=11))
     st.plotly_chart(fig_map, use_container_width=True)
 
 
