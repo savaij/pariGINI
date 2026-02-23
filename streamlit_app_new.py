@@ -992,6 +992,7 @@ geojson_hex, map_center = prepare_hex_geojson_fast(
 # ============================================================
 max_line_changes = 1
 change_penalty_min = 2.0
+DELETE_CHATELET = True
 
 # ============================================================
 # STATE: numero amici (min 2)
@@ -1157,6 +1158,8 @@ if st.button("Compute Gini", type="primary", use_container_width=True, disabled=
 
     _station_list = []
     for station, row in _station_rows.items():
+        if DELETE_CHATELET and "châtelet" in str(station).lower():
+            continue
         lines = _get_station_lines(G, station)
         if len(lines) == 0:
             continue
