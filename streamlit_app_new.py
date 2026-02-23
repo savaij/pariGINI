@@ -124,7 +124,7 @@ def load_metro_lines():
 # PAGE CONFIG
 # ============================================================
 st.set_page_config(
-    page_title="pariGINI • Esagoni",
+    page_title="pariGINI • Hexagons",
     layout="wide",
     initial_sidebar_state="collapsed",
 )
@@ -432,7 +432,7 @@ def build_segments_for_friend(details):
 def render_routes_html(results_df):
     ok_df = results_df[results_df["ok"] == True].copy()
     if ok_df.empty:
-        st.info("Nessun percorso disponibile da visualizzare.")
+        st.info("No routes available to display.")
         return
 
     ok_df = ok_df.sort_values("i")
@@ -466,14 +466,14 @@ def render_routes_html(results_df):
 
     legend_html = f"""
     <div class="legend">
-      <div class="legend-item">{_legend_pill("Camminata", WALK_COLOR)}</div>
+      <div class="legend-item">{_legend_pill("Walking", WALK_COLOR)}</div>
       {"".join([f'<div class="legend-item">{_legend_pill("Metro " + str(l), LINE_COLORS.get(l, "#666"))}</div>' for l in sorted(list(used_lines), key=_line_sort_key)])}
     </div>
     """
 
     rows = []
     for i, total, segs in precomp:
-        name = f"Amico {i+1}"
+        name = f"Friend {i+1}"
         seg_html = ""
 
         for s in segs:
@@ -484,7 +484,7 @@ def render_routes_html(results_df):
             w_pct = (dt / max_total) * 100.0
             if s["kind"] == "walk":
                 color = WALK_COLOR
-                title = f"Camminata: {fmt_min(dt)} min"
+                title = f"Walking: {fmt_min(dt)} min"
             else:
                 lk = _norm_line_for_color(s.get("line")) or "?"
                 color = LINE_COLORS.get(lk, "#666666")
@@ -712,8 +712,8 @@ def render_hexagon_map_fast(geojson, metrics_df, hexes_gdf):
     for ar, gg, mt, nn in zip(arr_col, gini, mean_time, nn_col):
         atxt = f"Arrondissement: {str(ar)}" if not pd.isna(ar) else "Arrondissement: N/A"
         gtxt = f"Gini: {float(gg):.3f}" if not pd.isna(gg) else "Gini: N/A"
-        mtxt = f"Tempo medio: {fmt_min(mt)} min" if not pd.isna(mt) else "Tempo medio: N/A"
-        nntxt = f"Fermata: {str(nn)}" if not pd.isna(nn) else "Fermata: N/A"
+        mtxt = f"Avg time: {fmt_min(mt)} min" if not pd.isna(mt) else "Avg time: N/A"
+        nntxt = f"Station: {str(nn)}" if not pd.isna(nn) else "Station: N/A"
         hover_all.append(f"{atxt}<br>{gtxt}, {mtxt}<br>{nntxt}")
     hover_valid = [hover_all[i] for i in range(len(z_vals)) if valid_mask[i]]
 
@@ -932,13 +932,11 @@ st.markdown("""
 """, unsafe_allow_html=True)
 
 # st.markdown("<div class='pg-title'>pariGINI</div>", unsafe_allow_html=True)
-st.markdown(
-    """
-I tuoi amici ti propongono un bar troppo lontano? Calcola quanto è equa la scelta.  
-Misura la disuguaglianza dei tempi di spostamento in metro usando il Gini Index.  
-Inserisci da dove partite (minimo 2 persone): il Gini viene calcolato automaticamente per tutti i punti della città.
-"""
-)
+st.markdown("""
+Are your friends suggesting a bar that is too far? **Check how fair that choice is.**<br>
+Measure inequality in metro travel times using the Gini-based _Fair index_. <br>
+Methodology is described below.
+""", unsafe_allow_html=True)
 
 # ============================================================
 # LOAD GRAPH & HEXAGONS (cache)
@@ -969,17 +967,17 @@ def load_precomputed_safe():
         )
         return precomp
     except Exception as e:
-        st.write(f"⚠️ Precomputed non disponibili ({type(e).__name__}): userò Dijkstra.")
+        st.write(f"⚠️ Precomputed data not available ({type(e).__name__}): falling back to Dijkstra.")
         return None
 
 
-with st.spinner("Caricamento rete metro, griglia esagonale e dati precomputati..."):
+with st.spinner("Loading metro network, hex grid, and precomputed data..."):
     try:
         G, node_index = load_graph()
         hexes_gdf = load_hexagon_data()
         precomputed = load_precomputed_safe()
     except Exception as e:
-        st.error(f"Errore nel caricamento: {e}")
+        st.error(f"Loading error: {e}")
         st.stop()
 
 # Prepara geometrie mappa (cache) una volta: ricentra + scala + semplifica + geojson
@@ -1014,26 +1012,26 @@ def remove_friend():
 # ============================================================
 # INPUT: ORIGINS (AMICI)
 # ============================================================
-st.header("Da dove partite?")
+st.header("Where are you starting from?")
 
 top_row = st.columns([1, 1, 8])
 with top_row[0]:
-    st.button("Aggiungi", use_container_width=True, on_click=add_friend)
+    st.button("Add", use_container_width=True, on_click=add_friend)
 with top_row[1]:
-    st.button("Rimuovi", use_container_width=True, disabled=(st.session_state.n_friends <= 2), on_click=remove_friend)
+    st.button("Remove", use_container_width=True, disabled=(st.session_state.n_friends <= 2), on_click=remove_friend)
 with top_row[2]:
-    st.caption("Minimo 2 amici. Scrivi gli indirizzi e seleziona un suggerimento.")
+    st.caption("Minimum 2 friends. Type the addresses and select a suggestion.")
 
 starts = []
 for i in range(st.session_state.n_friends):
     row = st.columns([1, 7])
     with row[0]:
-        st.markdown(f"**Amico {i+1}**")
+        st.markdown(f"**Friend {i+1}**")
     with row[1]:
         _, coords = address_autocomplete(
             label="",
             key=f"friend_{i}",
-            placeholder="Es: Gare de Lyon, 75012 Paris • 10 Rue de Rivoli 75004 Paris",
+            placeholder="Ex: Gare de Lyon, 75012 Paris • 10 Rue de Rivoli 75004 Paris",
         )
         if coords:
             starts.append(coords)
@@ -1045,10 +1043,10 @@ ready = len(starts) >= 2
 # ============================================================
 # ANALYSIS & RESULTS
 # ============================================================
-if st.button("Calcola Gini", type="primary", use_container_width=True, disabled=not ready):
+if st.button("Compute Gini", type="primary", use_container_width=True, disabled=not ready):
     st.divider()
 
-    with st.spinner("Calcolo tempi di percorrenza per tutti i punti della città..."):
+    with st.spinner("Computing travel times for all points in the city..."):
         try:
             # Usa i centroidi degli esagoni come target di routing.
             hexes_base = hexes_gdf
@@ -1092,7 +1090,7 @@ if st.button("Calcola Gini", type="primary", use_container_width=True, disabled=
                     nn_map = pd.Series(hexes_nn.values, index=np.arange(len(hexes_nn))).to_dict()
                     metrics_df["nearest_node"] = metrics_df["target_id"].map(nn_map)
         except Exception as e:
-            st.error(f"Errore nel calcolo: {e}")
+            st.error(f"Computation error: {e}")
             st.stop()
 
     # ===========================
@@ -1122,7 +1120,7 @@ if st.button("Calcola Gini", type="primary", use_container_width=True, disabled=
     _top_df = _top_df.dropna(subset=["_fair", "nearest_node"])
 
     # --- NUOVA LOGICA: top 5 esagoni, TUTTE le fermate vicine, top 3 per linee ---
-    _top5 = _top_df.sort_values("_fair").head(5).copy()
+    _top3 = _top_df.sort_values("_fair").head(3).copy()
 
     hexes_metric = hexes_gdf.copy().to_crs(epsg=METRIC_EPSG)
     RADIUS_M = 400
@@ -1143,7 +1141,7 @@ if st.button("Calcola Gini", type="primary", use_container_width=True, disabled=
     ).to_crs(epsg=METRIC_EPSG)
 
     _station_rows = {}
-    for _, row in _top5.iterrows():
+    for _, row in _top3.iterrows():
         tid = int(row["target_id"])
         if tid >= len(hexes_metric):
             continue
@@ -1173,7 +1171,7 @@ if st.button("Calcola Gini", type="primary", use_container_width=True, disabled=
     _top3_stations = _station_list[:3]
 
     if _top3_stations:
-        st.header("Ecco le prime tre fermate vicino alle quali potete uscire")
+        st.header("Here are the top three stations where you can get off and meet:")
 
         cols = st.columns(len(_top3_stations))
         for idx, entry in enumerate(_top3_stations):
@@ -1203,10 +1201,10 @@ if st.button("Calcola Gini", type="primary", use_container_width=True, disabled=
                 st.markdown(
 f"""
 <div style="background:#f9fafb;border:1px solid rgba(17,24,39,0.12);border-radius:14px;padding:18px 16px 14px 16px;">
-  <div style="font-size:1.25rem;font-weight:800;margin-bottom:6px;">{idx+1}. {station}</div>
+    <div style="font-size:1.25rem;font-weight:800;margin-bottom:6px;">{idx+1}. {station}</div>
   <div style="margin-bottom:8px;">{line_pills}</div>
   <div style="font-size:0.88rem;color:rgba(17,24,39,0.7);">
-    Tempo medio: <b>{mean_str} min</b> · Gini: <b>{gini_str}</b> · Linee: <b>{entry['n_lines']}</b>
+    Average time: <b>{mean_str} min</b> · Gini: <b>{gini_str}</b> · Lines: <b>{entry['n_lines']}</b>
   </div>
 </div>
 """,
@@ -1217,7 +1215,7 @@ f"""
     # ===========================
     # MAPPA (FAST)
     # ===========================
-    st.header("Mappa di equità - Gini Index per zona")
+    st.header("Fair index by area")
 
     # fig_map = render_hexagon_map_fast(
     #     geojson=geojson_hex,
@@ -1235,12 +1233,15 @@ f"""
 
     st.info(
     """
-**Interpretazione**
-- Verde: migliore accessibilità “fair” (tempo medio basso e/o disuguaglianza bassa)
-- Rosso: peggiore accessibilità “fair” (tempo medio alto e/o disuguaglianza alta)
+**How to read it**
+- Green: better accessibility fairness (low average time, low inequality)
+- Red: worse accessibility fairness (high average time, high inequality)
 
-Il colore usa **fair_index = mean_time_min × (gini_time + 1)**.
-In hover vedi: **Gini (0..1), Tempo medio (min)**.
+Fair index combines average travel time with inequality. It is defined as:
+
+$\\small\\text{mean travel time} \\times (\\text{Gini index} + 1)$
+
+Higher times or higher inequality increase the score.
 """
 )
 
@@ -1248,20 +1249,20 @@ In hover vedi: **Gini (0..1), Tempo medio (min)**.
     # ===========================
     # STATISTICHE (usa gini_time)
     # ===========================
-    st.subheader("Statistiche globali (Gini continuo)")
+    st.subheader("Global statistics (continuous Gini)")
     gini_norm = pd.to_numeric(metrics_df.get("gini_time"), errors="coerce").dropna()
     if not gini_norm.empty:
         c1, c2, c3, c4 = st.columns(4)
         with c1:
             st.metric("Min Gini", f"{gini_norm.min():.4f}")
         with c2:
-            st.metric("Media Gini", f"{gini_norm.mean():.4f}")
+            st.metric("Mean Gini", f"{gini_norm.mean():.4f}")
         with c3:
             st.metric("Max Gini", f"{gini_norm.max():.4f}")
         with c4:
-            st.metric("Zone valide", f"{len(gini_norm)}/{len(metrics_df)}")
+            st.metric("Valid areas", f"{len(gini_norm)}/{len(metrics_df)}")
     else:
-        st.info("Gini non disponibile (nessuna zona valida).")
+        st.info("Gini not available (no valid areas).")
 
 
 # ============================================================
@@ -1273,9 +1274,9 @@ st.markdown(
 ---
 **pariGINI**
 
-Dati: RATP Metro Network  
-Autocomplete: Géoplateforme (IGN) - completion  
+Data: RATP Metro Network  
+Autocomplete: Geoplateforme (IGN) - completion  
 
-Francesco Farina e Francesco Paolo Savatteri. Per omett e per tutt3
+Francesco Farina and Francesco Paolo Savatteri. For omett and for all.
 """
 )
