@@ -992,7 +992,7 @@ geojson_hex, map_center = prepare_hex_geojson_fast(
 # ============================================================
 max_line_changes = 1
 change_penalty_min = 2.0
-DELETE_CHATELET = True
+DELETE_CHATELET = False
 
 # ============================================================
 # STATE: numero amici (min 2)
@@ -1214,6 +1214,16 @@ f"""
                     unsafe_allow_html=True,
                 )
 
+        if DELETE_CHATELET:
+            st.markdown(
+                """
+                <div style="margin-top:16px;padding:12px;background:#fef3c7;border:1px solid rgba(245,158,11,0.3);border-radius:8px;font-size:0.85rem;color:rgba(17,24,39,0.8);">
+                     Among these stations, Châtelet will never be shown. This is an arbitrary choice, simply because it is a dull and sad area to hang out.
+                </div>
+                """,
+                unsafe_allow_html=True,
+            )
+
         st.markdown("<div style='height:12px'></div>", unsafe_allow_html=True)
     # ===========================
     # MAPPA (FAST)
@@ -1248,38 +1258,35 @@ Higher times or higher inequality increase the score.
 """
 )
 
-
-    # ===========================
-    # STATISTICHE (usa gini_time)
-    # ===========================
-    st.subheader("Global statistics (continuous Gini)")
-    gini_norm = pd.to_numeric(metrics_df.get("gini_time"), errors="coerce").dropna()
-    if not gini_norm.empty:
-        c1, c2, c3, c4 = st.columns(4)
-        with c1:
-            st.metric("Min Gini", f"{gini_norm.min():.4f}")
-        with c2:
-            st.metric("Mean Gini", f"{gini_norm.mean():.4f}")
-        with c3:
-            st.metric("Max Gini", f"{gini_norm.max():.4f}")
-        with c4:
-            st.metric("Valid areas", f"{len(gini_norm)}/{len(metrics_df)}")
-    else:
-        st.info("Gini not available (no valid areas).")
-
-
 # ============================================================
 # FOOTER
 # ============================================================
 st.divider()
 st.markdown(
-    """
----
+"""
+<style>
+.footer-pariGINI {
+    color: rgba(145, 153, 152, 0.84) !important;
+    font-size: 0.9rem;
+    line-height: 1.6;
+}
+.footer-pariGINI * {
+    color: rgba(145, 153, 152, 0.84) !important;
+}
+.footer-pariGINI strong {
+    font-weight: 700;
+}
+</style>
+<div class="footer-pariGINI">
+
 **pariGINI**
 
 Data: RATP Metro Network  
 Autocomplete: Geoplateforme (IGN) - completion  
 
 Francesco Farina and Francesco Paolo Savatteri. For omett and for all.
-"""
+
+</div>
+""",
+    unsafe_allow_html=True
 )
