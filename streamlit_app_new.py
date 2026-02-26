@@ -124,7 +124,7 @@ def load_metro_lines():
 # PAGE CONFIG
 # ============================================================
 st.set_page_config(
-    page_title="pariGINI • Hexagons",
+    page_title="pariGINI",
     layout="wide",
     initial_sidebar_state="collapsed",
 )
